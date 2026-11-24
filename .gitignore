@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.local
+
+# Tài liệu giáo trình dung lượng lớn & file khóa văn phòng (không đưa lên Git/deploy)
+sejong1/
+*.pdf
+.~lock.*
+.vercel

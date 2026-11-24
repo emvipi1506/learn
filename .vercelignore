@@ -1,0 +1,16 @@
+# Bỏ qua thư mục build, thư viện cục bộ và bí mật
+node_modules
+dist
+dist-ssr
+.git
+.env
+.env.local
+*.local
+
+# Bỏ qua tài liệu giáo trình dung lượng lớn (>220 MB) & tệp khóa văn phòng
+sejong1/
+*.pdf
+.~lock.*
+
+# Bỏ qua thư mục cấu hình trợ lý cục bộ
+.agents/

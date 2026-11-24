@@ -1,0 +1,639 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  Check,
+  Clock,
+  Loader2,
+  Mic,
+  Play,
+  Square,
+  Volume2,
+  Wand2,
+} from 'lucide-react';
+import { SPEAKING_LESSONS } from '../data/lessons';
+import { useApp } from '../store/AppContext';
+import {
+  getSpeechRecognitionConstructor,
+  getSupportedAudioMimeType,
+  isTTSSupported,
+  speakText,
+  stopSpeaking,
+  type SpeechRecognitionInstance,
+} from '../lib/speech';
+import { evaluateWithGemini } from '../lib/gemini';
+import { AIFeedbackCard } from '../components/AIFeedbackCard';
+import { SpeakingBrazierArt } from '../components/DarkArtworks';
+import type { AIFeedbackResult, NavTab } from '../types';
+
+function isIOSWebKit(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /iP(hone|ad|od)/i.test(ua) || (/Mac/i.test(ua) && 'ontouchend' in document);
+}
+
+export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void }) {
+  const { lessonProgress, completeLesson, geminiApiKey, addPracticeSubmission, profile } = useApp();
+  const [selectedId, setSelectedId] = useState(SPEAKING_LESSONS[0].id);
+
+  const [phase, setPhase] = useState<'idle' | 'prep' | 'speaking'>('idle');
+  const [secondsLeft, setSecondsLeft] = useState(SPEAKING_LESSONS[0].prepSeconds);
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState('');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorNeedsAiSettings, setErrorNeedsAiSettings] = useState(false);
+  const [showSample, setShowSample] = useState(false);
+
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiFeedback, setAiFeedback] = useState<AIFeedbackResult | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const activeStreamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const sessionIdRef = useRef(0);
+  const aiRequestIdRef = useRef(0);
+  const audioUrlRef = useRef<string | null>(null);
+
+  const lesson = SPEAKING_LESSONS.find((l) => l.id === selectedId) ?? SPEAKING_LESSONS[0];
+
+  const clearAudioUrl = useCallback(() => {
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    setAudioUrl(null);
+  }, []);
+
+  const stopRecordingCleanup = useCallback((invalidateSession = false) => {
+    if (invalidateSession) {
+      sessionIdRef.current += 1;
+    }
+
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    let willFireOnStop = false;
+    if (recorder && recorder.state !== 'inactive') {
+      try {
+        recorder.stop();
+        willFireOnStop = true;
+      } catch {
+        // ignore stop errors
+      }
+    }
+
+    if ((invalidateSession || !willFireOnStop) && activeStreamRef.current) {
+      activeStreamRef.current.getTracks().forEach((t) => t.stop());
+      activeStreamRef.current = null;
+    }
+
+    if (recognitionRef.current) {
+      const rec = recognitionRef.current;
+      recognitionRef.current = null;
+      rec.onresult = null;
+      rec.onerror = null;
+      rec.onend = null;
+      try {
+        rec.stop();
+      } catch {
+        // ignore
+      }
+    }
+    setIsRecording(false);
+  }, []);
+
+  // Reset trạng thái khi đổi bài hoặc unmount
+  useEffect(() => {
+    aiRequestIdRef.current += 1;
+    stopRecordingCleanup(true);
+    clearAudioUrl();
+    stopSpeaking();
+    setPhase('idle');
+    setSecondsLeft(lesson.prepSeconds);
+    setTranscript('');
+    setErrorMsg(null);
+    setErrorNeedsAiSettings(false);
+    setShowSample(false);
+    setAiLoading(false);
+    setAiFeedback(null);
+    setNotice(null);
+    return () => {
+      aiRequestIdRef.current += 1;
+      stopRecordingCleanup(true);
+      clearAudioUrl();
+      stopSpeaking();
+    };
+  }, [lesson.id, lesson.prepSeconds, stopRecordingCleanup, clearAudioUrl]);
+
+  // Bộ đếm giây ổn định — không khởi tạo lại interval mỗi giây
+  useEffect(() => {
+    if (phase === 'idle') return;
+    const timer = window.setInterval(() => {
+      setSecondsLeft((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [phase]);
+
+  // Xử lý chuyển pha và tự động dừng thu âm khi hết giờ
+  useEffect(() => {
+    if (phase === 'idle' || secondsLeft > 0) return;
+    if (phase === 'prep') {
+      setPhase('speaking');
+      setSecondsLeft(lesson.speakSeconds);
+    } else if (phase === 'speaking') {
+      stopRecordingCleanup(false);
+      setPhase('idle');
+    }
+  }, [phase, secondsLeft, lesson.speakSeconds, stopRecordingCleanup]);
+
+  const startRecording = async () => {
+    setErrorMsg(null);
+    setErrorNeedsAiSettings(false);
+    setNotice(null);
+    stopSpeaking();
+
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      setErrorMsg(
+        'Trình duyệt chặn Micro vì trang chưa chạy qua HTTPS (hoặc localhost). Hãy triển khai HTTPS (Vercel/Cloudflare Pages) hoặc mở trên localhost để thu âm.'
+      );
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setErrorMsg(
+        'Trình duyệt hiện tại không hỗ trợ ghi âm (MediaRecorder). Bạn vẫn có thể gõ câu trả lời vào ô Transcript bên dưới để AI chấm điểm.'
+      );
+      return;
+    }
+
+    // Dừng phiên cũ (nếu có) và tạo sessionId mới để chống race condition
+    stopRecordingCleanup(true);
+    const currentSession = ++sessionIdRef.current;
+
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (currentSession !== sessionIdRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      activeStreamRef.current = stream;
+      const mimeType = getSupportedAudioMimeType();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (currentSession !== sessionIdRef.current) return;
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        stream?.getTracks().forEach((t) => t.stop());
+        if (activeStreamRef.current === stream) {
+          activeStreamRef.current = null;
+        }
+
+        // Nếu người dùng đã chuyển bài hoặc rời trang trước khi onstop chạy, hủy bản thu cũ
+        if (currentSession !== sessionIdRef.current || chunksRef.current.length === 0) {
+          chunksRef.current = [];
+          return;
+        }
+
+        const blob = new Blob(chunksRef.current, { type: mimeType || recorder.mimeType || 'audio/mp4' });
+        const url = URL.createObjectURL(blob);
+        if (audioUrlRef.current) {
+          URL.revokeObjectURL(audioUrlRef.current);
+        }
+        audioUrlRef.current = url;
+        setAudioUrl(url);
+      };
+
+      recorder.onerror = () => {
+        stream?.getTracks().forEach((t) => t.stop());
+        if (currentSession === sessionIdRef.current) {
+          setIsRecording(false);
+          setPhase('idle');
+          setErrorMsg('Quá trình ghi âm bị gián đoạn. Vui lòng thử thu lại.');
+        }
+      };
+
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+      setPhase('speaking');
+      setSecondsLeft(lesson.speakSeconds);
+
+      const SpeechRec = getSpeechRecognitionConstructor();
+      if (SpeechRec) {
+        try {
+          const rec = new SpeechRec();
+          rec.lang = 'en-US';
+          // Tránh continuous = true trên iOS WebKit gây treo micro hoặc xung đột MediaRecorder
+          rec.continuous = !isIOSWebKit();
+          rec.interimResults = false;
+          rec.onresult = (event) => {
+            if (currentSession !== sessionIdRef.current) return;
+            let added = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              if (event.results[i].isFinal) {
+                added += `${event.results[i][0].transcript} `;
+              }
+            }
+            if (added.trim()) {
+              setTranscript((prev) => `${prev.trim()} ${added.trim()}`.trim());
+            }
+          };
+          rec.onerror = () => {
+            // Không phá hỏng bản ghi âm MediaRecorder nếu SpeechRecognition bị từ chối/ngắt trên WebKit
+            if (recognitionRef.current === rec) {
+              recognitionRef.current = null;
+            }
+          };
+          rec.onend = () => {
+            if (recognitionRef.current === rec) {
+              recognitionRef.current = null;
+            }
+          };
+          rec.start();
+          recognitionRef.current = rec;
+        } catch {
+          // SpeechRecognition fallback — người dùng vẫn có bản ghi âm và ô Transcript
+        }
+      }
+    } catch {
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+      }
+      if (activeStreamRef.current === stream) {
+        activeStreamRef.current = null;
+      }
+      setIsRecording(false);
+      setErrorMsg(
+        'Không thể truy cập micro. Hãy cấp quyền Micro cho trình duyệt (trên iOS Safari: Cài đặt → Safari → Micro) hoặc gõ lời nói vào ô Transcript.'
+      );
+    }
+  };
+
+  const stopRecording = () => {
+    stopRecordingCleanup(false);
+    setPhase('idle');
+  };
+
+  const startPrepTimer = () => {
+    stopRecordingCleanup(false);
+    setPhase('prep');
+    setSecondsLeft(lesson.prepSeconds);
+  };
+
+  const handleSpeakPrompt = (text: string) => {
+    if (!isTTSSupported()) {
+      setErrorMsg('Trình duyệt hiện tại không hỗ trợ đọc giọng nói (Text-to-Speech).');
+      setErrorNeedsAiSettings(false);
+      return;
+    }
+    speakText(text, { lang: 'en-GB', rate: 0.92 });
+  };
+
+  const handleCompletePractice = () => {
+    completeLesson(lesson.id, 'speaking', 85, lesson.xpReward, 10);
+    if (transcript.trim()) {
+      addPracticeSubmission({
+        skill: 'speaking',
+        promptId: lesson.id,
+        promptTitle: lesson.title,
+        content: transcript,
+        bandEstimate: Math.min(6.5, 4.0 + lesson.act * 0.5),
+      });
+    }
+    setNotice(`Hoàn thành luyện nói và cộng +${lesson.xpReward} XP.`);
+  };
+
+  const handleEvaluateAI = async () => {
+    setErrorNeedsAiSettings(false);
+    if (transcript.trim().split(/\s+/).filter(Boolean).length < 12) {
+      setErrorMsg('Hãy nói hoặc nhập ít nhất 12 từ vào ô Transcript để AI chấm điểm Speaking.');
+      return;
+    }
+    if (!geminiApiKey) {
+      setErrorMsg('Bạn chưa nhập Gemini API Key trong mục Cài đặt.');
+      setErrorNeedsAiSettings(true);
+      return;
+    }
+    const reqId = ++aiRequestIdRef.current;
+    const currentLesson = lesson;
+    const currentTranscript = transcript;
+    setAiLoading(true);
+    setErrorMsg(null);
+    try {
+      const result = await evaluateWithGemini({
+        apiKey: geminiApiKey,
+        skill: 'speaking',
+        promptTitle: currentLesson.title,
+        promptText: `${currentLesson.questions.join('\n')}${currentLesson.cueCardBullets ? `\nCue card: ${currentLesson.cueCardBullets.join(', ')}` : ''}`,
+        userResponse: currentTranscript,
+        targetBand: profile.targetBand,
+      });
+      if (reqId !== aiRequestIdRef.current) return;
+      setAiFeedback(result);
+      completeLesson(
+        currentLesson.id,
+        'speaking',
+        Math.min(100, Math.round((result.overallBand / 7.0) * 100)),
+        currentLesson.xpReward,
+        12
+      );
+      addPracticeSubmission({
+        skill: 'speaking',
+        promptId: currentLesson.id,
+        promptTitle: currentLesson.title,
+        content: currentTranscript,
+        bandEstimate: result.overallBand,
+        aiFeedback: result,
+      });
+    } catch (err) {
+      if (reqId !== aiRequestIdRef.current) return;
+      const msg = err instanceof Error ? err.message : 'Lỗi kết nối Gemini AI.';
+      setErrorMsg(msg);
+      if (/api key|khóa/i.test(msg)) {
+        setErrorNeedsAiSettings(true);
+      }
+    } finally {
+      if (reqId === aiRequestIdRef.current) {
+        setAiLoading(false);
+      }
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="ornate-panel flex flex-col sm:flex-row sm:items-center justify-between gap-4 overflow-hidden">
+        <div className="p-5 sm:p-7">
+          <p className="font-fantasy text-[11px] uppercase tracking-[0.24em] text-[#C5A059]">
+            Điện IV ◆ Speaking
+          </p>
+          <h1 className="font-fantasy text-2xl sm:text-3xl text-[#F4EFE4] mt-1">
+            Lò Luyện Thanh Âm
+          </h1>
+          <p className="text-sm text-[#968D80] mt-1.5 max-w-xl">
+            Ghi âm trực tiếp trên iPhone & Windows, nghe lại phát âm của chính mình và luyện nhịp chuẩn phòng thi IELTS.
+          </p>
+        </div>
+        <div className="hidden sm:block w-52 h-32 shrink-0 border-l border-[#C5A059]/20">
+          <SpeakingBrazierArt className="w-full h-full object-cover" />
+        </div>
+      </div>
+
+      {/* Chọn chủ đề */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {SPEAKING_LESSONS.map((item) => {
+          const done = lessonProgress[item.id];
+          const active = item.id === lesson.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setSelectedId(item.id)}
+              className={`p-4 text-left border transition cursor-pointer ${
+                active
+                  ? 'bg-[#C5A059]/12 border-[#E2C88D]'
+                  : 'sanctuary-panel hover:border-[#C5A059]/50'
+              }`}
+            >
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-fantasy uppercase tracking-wider text-[#C5A059]">
+                  Chương {item.act} • {item.part}
+                </span>
+                {done ? (
+                  <Check className="w-3.5 h-3.5 text-[#7BC2A0]" />
+                ) : (
+                  <span className="text-[#968D80]">{item.bandTarget}</span>
+                )}
+              </div>
+              <p className="text-sm font-medium text-[#ECE6D8] mt-1.5 line-clamp-2">{item.title}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        {/* CỘT TRÁI: THẺ ĐỀ SPEAKING */}
+        <div className="lg:col-span-6 sanctuary-panel p-5 sm:p-6 space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#C5A059]/15">
+            <span className="text-[11px] uppercase tracking-[0.18em] text-[#C5A059] font-semibold">
+              {lesson.part} • {lesson.bandTarget}
+            </span>
+            <button
+              onClick={() => handleSpeakPrompt(lesson.questions.join('. '))}
+              className="btn-ghost-brass px-3 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <Volume2 className="w-3.5 h-3.5" /> Nghe câu hỏi
+            </button>
+          </div>
+
+          <h2 className="font-fantasy text-xl text-[#F4EFE4]">{lesson.title}</h2>
+
+          <div className="p-4 bg-[#0B0A08] border-l-2 border-[#C5A059] space-y-2.5">
+            {lesson.questions.map((q, idx) => (
+              <p key={idx} className="text-sm sm:text-base text-[#ECE6D8] leading-relaxed">
+                {q}
+              </p>
+            ))}
+            {lesson.cueCardBullets && (
+              <ul className="pt-2 space-y-1.5 text-sm text-[#E2C88D] list-disc pl-5">
+                {lesson.cueCardBullets.map((b, idx) => (
+                  <li key={idx}>{b}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#C5A059]">
+              Từ vựng ăn điểm (Chạm để nghe)
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {lesson.keyVocab.map((v, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleSpeakPrompt(v.word)}
+                  className="px-3 py-2 bg-[#0B0A08] hover:border-[#E2C88D] border border-[#C5A059]/20 text-left cursor-pointer"
+                >
+                  <p className="text-xs font-semibold text-[#ECE6D8] flex items-center gap-1.5">
+                    {v.word} <Volume2 className="w-3 h-3 text-[#C5A059]" />
+                  </p>
+                  <p className="text-[11px] text-[#968D80]">
+                    {v.ipa} • {v.meaningVi}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-4 bg-[#0B0A08] border border-[#C5A059]/15 space-y-1.5">
+            <p className="text-[11px] uppercase tracking-[0.16em] text-[#E2C88D] font-semibold">
+              Chiến thuật phòng thi
+            </p>
+            <ul className="text-xs text-[#C8BFB0] list-disc pl-4 space-y-1">
+              {lesson.tipsVi.map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="pt-2 border-t border-[#C5A059]/15">
+            <button
+              onClick={() => setShowSample((v) => !v)}
+              className="text-xs uppercase tracking-[0.14em] font-semibold text-[#E2C88D] hover:underline cursor-pointer"
+            >
+              {showSample ? '▼ Ẩn câu trả lời mẫu' : '▶ Xem & nghe bài mẫu Band 6.5+'}
+            </button>
+            {showSample && (
+              <div className="mt-3 p-4 bg-[#0B0A08] border border-[#C5A059]/18 space-y-2.5">
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => handleSpeakPrompt(lesson.sampleAnswerEn)}
+                    className="btn-ghost-brass px-3 py-1 text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Play className="w-3 h-3 fill-current" /> Nghe bài mẫu
+                  </button>
+                </div>
+                <p className="text-sm text-[#ECE6D8] leading-relaxed">{lesson.sampleAnswerEn}</p>
+                <p className="text-xs text-[#968D80] leading-relaxed pt-2 border-t border-[#C5A059]/12">
+                  {lesson.sampleAnswerVi}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* CỘT PHẢI: PHÒNG THU ÂM */}
+        <div className="lg:col-span-6 space-y-4">
+          <div className="sanctuary-panel p-5 sm:p-6 space-y-5">
+            <div className="flex items-center justify-between gap-3 p-4 bg-[#0B0A08] border border-[#C5A059]/20">
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-[#968D80]">
+                  {phase === 'prep'
+                    ? 'Đang chuẩn bị ý tưởng'
+                    : phase === 'speaking'
+                    ? 'Thời gian trả lời'
+                    : `Chuẩn bị ${lesson.prepSeconds}s • Nói ${lesson.speakSeconds}s`}
+                </p>
+                <p className="font-fantasy text-2xl text-[#E2C88D] mt-1 flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-[#C5A059]" />
+                  {String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:
+                  {String(secondsLeft % 60).padStart(2, '0')}
+                </p>
+              </div>
+
+              <button
+                onClick={startPrepTimer}
+                className="btn-ghost-brass px-3.5 py-2 text-xs cursor-pointer"
+              >
+                Đếm chuẩn bị ({lesson.prepSeconds}s)
+              </button>
+            </div>
+
+            {/* Nút thu âm dấu ấn hình tròn cổ đồng - đỏ huyết */}
+            <div className="flex flex-col items-center py-4">
+              {!isRecording ? (
+                <button
+                  onClick={startRecording}
+                  className="w-24 h-24 rounded-full bg-[#15120F] hover:bg-[#1E1914] border-2 border-[#C5A059] shadow-[0_0_0_5px_rgba(197,160,89,0.12)] flex flex-col items-center justify-center text-[#E2C88D] transition active:scale-95 cursor-pointer"
+                >
+                  <Mic className="w-7 h-7" />
+                  <span className="font-fantasy text-[10px] tracking-[0.2em] mt-1.5">THU ÂM</span>
+                </button>
+              ) : (
+                <button
+                  onClick={stopRecording}
+                  className="w-24 h-24 rounded-full bg-[#8E2933] border-2 border-[#E2C88D] shadow-[0_0_0_6px_rgba(142,41,51,0.3)] flex flex-col items-center justify-center text-[#F6EFE2] animate-pulse cursor-pointer"
+                >
+                  <Square className="w-6 h-6 fill-current" />
+                  <span className="font-fantasy text-[10px] tracking-[0.2em] mt-1.5">DỪNG</span>
+                </button>
+              )}
+              <p className="text-xs text-[#968D80] mt-3.5 text-center">
+                {isRecording
+                  ? 'Đang ghi âm giọng nói của bạn...'
+                  : 'Nhấn để bắt đầu nói, sau đó nghe lại bản thu ngay tại đây.'}
+              </p>
+            </div>
+
+            {audioUrl && (
+              <div className="p-3.5 bg-[#0B0A08] border border-[#4E8A6E]/40 space-y-2">
+                <p className="text-xs font-semibold text-[#7BC2A0]">Bản ghi âm của bạn:</p>
+                <audio controls src={audioUrl} className="w-full h-10" />
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#968D80]">
+                Transcript (Tự chuyển giọng nói hoặc gõ để AI chấm)
+              </label>
+              <textarea
+                value={transcript}
+                onChange={(e) => setTranscript(e.target.value)}
+                rows={4}
+                placeholder="Nội dung bạn nói sẽ xuất hiện tại đây..."
+                className="w-full bg-[#090807] border border-[#C5A059]/22 focus:border-[#E2C88D] focus:outline-none p-3.5 text-base sm:text-sm text-[#ECE6D8]"
+              />
+            </div>
+
+            {errorMsg && (
+              <div className="p-3 bg-[#8E2933]/15 border border-[#8E2933]/50 text-xs text-[#F2C3C8] flex items-start justify-between gap-2">
+                <span className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-[#E28A93]" />
+                  {errorMsg}
+                </span>
+                {errorNeedsAiSettings && (
+                  <button
+                    onClick={() => onNavigate('settings')}
+                    className="shrink-0 btn-ghost-brass px-2.5 py-1 text-[11px] cursor-pointer"
+                  >
+                    Cài đặt AI
+                  </button>
+                )}
+              </div>
+            )}
+
+            {notice && (
+              <div className="p-3 bg-[#4E8A6E]/12 border border-[#4E8A6E]/40 text-xs text-[#B9E6D0] flex items-center gap-2">
+                <Check className="w-4 h-4 text-[#7BC2A0]" />
+                {notice}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={handleEvaluateAI}
+                disabled={aiLoading}
+                className="flex-1 min-w-[190px] btn-crimson py-3 px-4 text-xs uppercase tracking-[0.14em] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                {aiLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Đang phân tích...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-4 h-4" /> AI Chấm Speaking
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={handleCompletePractice}
+                className="btn-brass py-3 px-5 text-xs uppercase tracking-[0.14em] cursor-pointer"
+              >
+                Hoàn Thành (+{lesson.xpReward} XP)
+              </button>
+            </div>
+          </div>
+
+          {aiFeedback && <AIFeedbackCard feedback={aiFeedback} />}
+        </div>
+      </div>
+    </div>
+  );
+}
