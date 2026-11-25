@@ -169,6 +169,7 @@ export interface AIFeedbackResult {
   improvementsVi: string[];
   upgradedVersionEn: string;
   encouragementVi: string;
+  transcriptEn?: string;
 }
 
 export interface PracticeSubmission {

@@ -15,7 +15,7 @@ export function AIFeedbackCard({ feedback }: { feedback: AIFeedbackResult }) {
 
         <div className="px-4 py-2 bg-[#0D0C0A] border border-[#C5A059]/45 text-center">
           <p className="text-[10px] uppercase tracking-[0.18em] text-[#968D80]">Band Ước Tính</p>
-          <p className="font-fantasy text-2xl text-[#E2C88D] mt-0.5">
+          <p className="font-crest text-2xl text-[#E2C88D] mt-0.5">
             {feedback.overallBand.toFixed(1)}
           </p>
         </div>
@@ -27,7 +27,7 @@ export function AIFeedbackCard({ feedback }: { feedback: AIFeedbackResult }) {
           <div key={idx} className="p-3.5 bg-[#0D0C0A] border border-[#C5A059]/18">
             <div className="flex items-center justify-between gap-2 mb-1.5">
               <span className="text-xs font-semibold text-[#E2C88D]">{c.name}</span>
-              <span className="font-fantasy text-sm text-[#ECE6D8]">{c.score.toFixed(1)}</span>
+              <span className="font-crest text-sm text-[#ECE6D8]">{c.score.toFixed(1)}</span>
             </div>
             <p className="text-xs text-[#C8BFB0] leading-relaxed">{c.commentVi}</p>
           </div>

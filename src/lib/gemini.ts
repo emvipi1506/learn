@@ -1,7 +1,31 @@
 import type { AIFeedbackResult } from '../types';
 
 const GEMINI_KEY_STORAGE = 'grimoire_gemini_api_key';
+const GEMINI_ENDPOINT =
+  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 const GEMINI_TIMEOUT_MS = 25000;
+const GEMINI_AUDIO_TIMEOUT_MS = 35000;
+const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
+
+export function cleanAudioMimeType(mimeType: string): string {
+  const base = mimeType.split(';')[0].trim().toLowerCase();
+  if (base.startsWith('audio/')) return base;
+  return 'audio/webm';
+}
+
+export async function blobToBase64(blob: Blob): Promise<string> {
+  if (blob.size > MAX_AUDIO_BYTES) {
+    throw new Error('Bản ghi âm vượt quá 15MB. Hãy thu ngắn hơn hoặc chép văn bản để chấm.');
+  }
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
 
 export function getSavedGeminiKey(): string {
   try {
@@ -95,6 +119,11 @@ export function parseAndNormalizeGeminiFeedback(rawText: string): AIFeedbackResu
   const strengthsVi = normalizeStringArray(obj.strengthsVi);
   const improvementsVi = normalizeStringArray(obj.improvementsVi);
 
+  const transcriptEn =
+    typeof obj.transcriptEn === 'string' && obj.transcriptEn.trim()
+      ? obj.transcriptEn.trim()
+      : undefined;
+
   return {
     overallBand,
     criteria,
@@ -109,61 +138,33 @@ export function parseAndNormalizeGeminiFeedback(rawText: string): AIFeedbackResu
       typeof obj.encouragementVi === 'string' && obj.encouragementVi.trim()
         ? obj.encouragementVi.trim()
         : 'Giữ vững nhịp luyện tập mỗi ngày, ngọn lửa Band 6.5 đang tiến rất gần.',
+    ...(transcriptEn ? { transcriptEn } : {}),
   };
 }
 
-export async function evaluateWithGemini(params: {
+async function callGeminiGenerateContent(params: {
   apiKey: string;
-  skill: 'writing' | 'speaking';
-  promptTitle: string;
-  promptText: string;
-  userResponse: string;
-  targetBand?: number;
-}): Promise<AIFeedbackResult> {
-  const { apiKey, skill, promptTitle, promptText, userResponse, targetBand = 6.5 } = params;
-
+  parts: Array<Record<string, unknown>>;
+  temperature: number;
+  responseMimeType?: string;
+  timeoutMs: number;
+}): Promise<string> {
+  const { apiKey, parts, temperature, responseMimeType, timeoutMs } = params;
   const trimmedKey = apiKey.trim();
   if (!trimmedKey) {
     throw new Error('Bạn chưa nhập Gemini API Key trong mục Cài đặt.');
   }
 
-  const criteriaSpec =
-    skill === 'writing'
-      ? '4 tiêu chí IELTS Writing: Task Achievement / Response (TA/TR), Coherence & Cohesion (CC), Lexical Resource (LR), Grammatical Range & Accuracy (GRA)'
-      : '4 tiêu chí IELTS Speaking: Fluency & Coherence (FC), Lexical Resource (LR), Grammatical Range & Accuracy (GRA), Pronunciation / Clarity ước lượng từ transcript (PR)';
-
-  const systemInstruction = `Bạn là Giám khảo IELTS thân thiện, chuyên kèm học viên Việt Nam đi từ mất gốc lên Band ${targetBand}.
-Hãy chấm bài ${skill.toUpperCase()} dưới đây công tâm theo ${criteriaSpec}.
-TRẢ VỀ DUY NHẤT 1 JSON HỢP LỆ (không kèm markdown hay chữ thừa) theo đúng cấu trúc:
-{
-  "overallBand": 5.5,
-  "criteria": [
-    { "name": "Tên tiêu chí", "score": 5.5, "commentVi": "Nhận xét ngắn gọn, dễ hiểu bằng tiếng Việt kèm ví dụ lỗi từ bài làm" }
-  ],
-  "strengthsVi": ["Điểm tốt 1", "Điểm tốt 2"],
-  "improvementsVi": ["Cách sửa cụ thể 1 (kèm câu gốc -> câu sửa)", "Cách sửa cụ thể 2"],
-  "upgradedVersionEn": "Phiên bản viết lại tự nhiên đạt khoảng Band 6.5 - 7.0 bằng tiếng Anh",
-  "encouragementVi": "1 câu động viên ngắn gọn theo phong cách Pháp sư cố vấn Dark Fantasy nhẹ nhàng"
-}
-Điểm số phải làm tròn theo thang IELTS (bội số của 0.5, từ 2.0 đến 9.0).`;
-
-  const userMessage = `Chủ đề: ${promptTitle}
-Đề bài: ${promptText}
-
-Bài làm của học viên:
-"""
-${userResponse}
-"""`;
-
-  const endpoint =
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   let response: Response;
   try {
-    response = await fetch(endpoint, {
+    const generationConfig: Record<string, unknown> = { temperature };
+    if (responseMimeType) {
+      generationConfig.responseMimeType = responseMimeType;
+    }
+    response = await fetch(GEMINI_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -174,18 +175,17 @@ ${userResponse}
         contents: [
           {
             role: 'user',
-            parts: [{ text: `${systemInstruction}\n\n${userMessage}` }],
+            parts,
           },
         ],
-        generationConfig: {
-          temperature: 0.35,
-          responseMimeType: 'application/json',
-        },
+        generationConfig,
       }),
     });
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('Quá thời gian phản hồi AI (25 giây). Hãy kiểm tra kết nối mạng và thử lại.');
+      throw new Error(
+        `Quá thời gian phản hồi AI (${Math.round(timeoutMs / 1000)} giây). Hãy kiểm tra kết nối mạng và thử lại.`
+      );
     }
     throw new Error('Không thể kết nối tới máy chủ Gemini AI. Vui lòng kiểm tra kết nối mạng.');
   } finally {
@@ -201,8 +201,118 @@ ${userResponse}
   }
 
   const data = await response.json();
-  const rawText: string =
-    data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('\n') || '';
+  return (
+    data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('\n') || ''
+  );
+}
+
+/**
+ * Chép lời nguyên văn tiếng Anh từ bản ghi âm Speaking bằng Gemini 2.5 Flash
+ */
+export async function transcribeAudioWithGemini(params: {
+  apiKey: string;
+  audioBlob: Blob;
+  promptHint?: string;
+}): Promise<string> {
+  const { apiKey, audioBlob, promptHint } = params;
+  if (!audioBlob || audioBlob.size === 0) {
+    throw new Error('Bản ghi âm trống. Hãy thu âm lại rồi thử chép lời.');
+  }
+
+  const base64Audio = await blobToBase64(audioBlob);
+  const mimeType = cleanAudioMimeType(audioBlob.type);
+  const instruction = `Listen to this IELTS Speaking audio recording and transcribe accurately what the speaker says in English.
+${promptHint ? `Topic context: ${promptHint}\n` : ''}Rules:
+- Return ONLY the plain English transcript text with natural punctuation.
+- Do NOT add markdown, labels, translations, or explanations.
+- If no intelligible speech is heard, return an empty string.`;
+
+  const rawText = await callGeminiGenerateContent({
+    apiKey,
+    parts: [
+      { text: instruction },
+      { inlineData: { mimeType, data: base64Audio } },
+    ],
+    temperature: 0.1,
+    timeoutMs: GEMINI_AUDIO_TIMEOUT_MS,
+  });
+
+  const cleaned = rawText.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+  if (!cleaned) {
+    throw new Error('Không nghe rõ lời nói tiếng Anh trong bản ghi âm. Hãy kiểm tra micro và thử thu lại.');
+  }
+  return cleaned;
+}
+
+export async function evaluateWithGemini(params: {
+  apiKey: string;
+  skill: 'writing' | 'speaking';
+  promptTitle: string;
+  promptText: string;
+  userResponse: string;
+  targetBand?: number;
+  audioBlob?: Blob | null;
+}): Promise<AIFeedbackResult> {
+  const { apiKey, skill, promptTitle, promptText, userResponse, targetBand = 6.5, audioBlob } = params;
+  const hasAudio = skill === 'speaking' && Boolean(audioBlob && audioBlob.size > 0);
+
+  const criteriaSpec =
+    skill === 'writing'
+      ? '4 tiêu chí IELTS Writing: Task Achievement / Response (TA/TR), Coherence & Cohesion (CC), Lexical Resource (LR), Grammatical Range & Accuracy (GRA)'
+      : hasAudio
+      ? '4 tiêu chí IELTS Speaking: Fluency & Coherence (FC), Lexical Resource (LR), Grammatical Range & Accuracy (GRA), Pronunciation / Clarity (PR) đánh giá trực tiếp từ bản ghi âm'
+      : '4 tiêu chí IELTS Speaking: Fluency & Coherence (FC), Lexical Resource (LR), Grammatical Range & Accuracy (GRA), Pronunciation / Clarity ước lượng từ transcript (PR)';
+
+  const transcriptSchemaLine = hasAudio
+    ? '\n  "transcriptEn": "Chép lại nguyên văn câu trả lời tiếng Anh nghe được từ bản ghi âm",'
+    : '';
+
+  const systemInstruction = `Bạn là Giám khảo IELTS thân thiện, chuyên kèm học viên Việt Nam đi từ mất gốc lên Band ${targetBand}.
+Hãy chấm bài ${skill.toUpperCase()} dưới đây công tâm theo ${criteriaSpec}.
+TRẢ VỀ DUY NHẤT 1 JSON HỢP LỆ (không kèm markdown hay chữ thừa) theo đúng cấu trúc:
+{
+  "overallBand": 5.5,${transcriptSchemaLine}
+  "criteria": [
+    { "name": "Tên tiêu chí", "score": 5.5, "commentVi": "Nhận xét ngắn gọn, dễ hiểu bằng tiếng Việt kèm ví dụ lỗi từ bài làm" }
+  ],
+  "strengthsVi": ["Điểm tốt 1", "Điểm tốt 2"],
+  "improvementsVi": ["Cách sửa cụ thể 1 (kèm câu gốc -> câu sửa)", "Cách sửa cụ thể 2"],
+  "upgradedVersionEn": "Phiên bản viết lại tự nhiên đạt khoảng Band 6.5 - 7.0 bằng tiếng Anh",
+  "encouragementVi": "1 câu động viên ngắn gọn theo phong cách Pháp sư cố vấn Dark Fantasy nhẹ nhàng"
+}
+Điểm số phải làm tròn theo thang IELTS (bội số của 0.5, từ 2.0 đến 9.0).`;
+
+  const trimmedResponse = userResponse.trim();
+  const userMessage = hasAudio
+    ? `Chủ đề: ${promptTitle}
+Đề bài: ${promptText}
+Hãy nghe trực tiếp file ghi âm đính kèm, chép chính xác lời nói vào "transcriptEn" và chấm điểm theo giọng nói thực tế.${trimmedResponse ? `\n\nGhi chú/Transcript học viên gõ thêm (chỉ dùng tham khảo):\n"""\n${trimmedResponse}\n"""` : ''}`
+    : `Chủ đề: ${promptTitle}
+Đề bài: ${promptText}
+
+Bài làm của học viên:
+"""
+${userResponse}
+"""`;
+
+  const parts: Array<Record<string, unknown>> = [{ text: `${systemInstruction}\n\n${userMessage}` }];
+  if (hasAudio && audioBlob) {
+    const base64Audio = await blobToBase64(audioBlob);
+    parts.push({
+      inlineData: {
+        mimeType: cleanAudioMimeType(audioBlob.type),
+        data: base64Audio,
+      },
+    });
+  }
+
+  const rawText = await callGeminiGenerateContent({
+    apiKey,
+    parts,
+    temperature: 0.35,
+    responseMimeType: 'application/json',
+    timeoutMs: hasAudio ? GEMINI_AUDIO_TIMEOUT_MS : GEMINI_TIMEOUT_MS,
+  });
 
   if (!rawText) {
     throw new Error('AI không trả về nội dung đánh giá. Vui lòng thử lại.');

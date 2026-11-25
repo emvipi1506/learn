@@ -142,7 +142,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
         <div className="relative z-10 grid grid-cols-3 divide-x divide-[#C5A059]/18 border-t border-[#C5A059]/20 bg-[#0B0A08]/85 backdrop-blur-xs">
           <div className="px-4 py-3.5 sm:px-7">
             <p className="text-[10px] uppercase tracking-[0.18em] text-[#968D80]">Band Ước Tính</p>
-            <p className="font-fantasy text-xl sm:text-2xl text-[#E2C88D] mt-0.5">
+            <p className="font-crest text-xl sm:text-2xl text-[#E2C88D] mt-0.5">
               {profile.currentBand.toFixed(1)}
               <span className="text-xs text-[#968D80] font-sans ml-1">/ {profile.targetBand.toFixed(1)}</span>
             </p>
@@ -150,14 +150,14 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
 
           <div className="px-4 py-3.5 sm:px-7">
             <p className="text-[10px] uppercase tracking-[0.18em] text-[#968D80]">Ngọn Lửa Liên Tiếp</p>
-            <p className="font-fantasy text-xl sm:text-2xl text-[#ECE6D8] mt-0.5">
+            <p className="font-crest text-xl sm:text-2xl text-[#ECE6D8] mt-0.5">
               {profile.streakDays} <span className="text-xs text-[#968D80] font-sans">ngày</span>
             </p>
           </div>
 
           <div className="px-4 py-3.5 sm:px-7">
             <p className="text-[10px] uppercase tracking-[0.18em] text-[#968D80]">Tiến Độ Điện Thờ</p>
-            <p className="font-fantasy text-xl sm:text-2xl text-[#ECE6D8] mt-0.5">
+            <p className="font-crest text-xl sm:text-2xl text-[#ECE6D8] mt-0.5">
               {totalCompletedLessons}
               <span className="text-xs text-[#968D80] font-sans"> / {totalLessons} bài</span>
             </p>
@@ -182,10 +182,10 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
                 {/* Tranh khắc đồng phía trên */}
                 <div className="relative aspect-[16/9] w-full overflow-hidden border-b border-[#C5A059]/18 bg-[#0E0C0A]">
                   <Art className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                  <span className="absolute top-2.5 left-3 font-fantasy text-[11px] tracking-[0.2em] text-[#C5A059]/85">
+                  <span className="absolute top-2.5 left-3 font-crest text-[11px] tracking-[0.2em] text-[#C5A059]/85">
                     {realm.roman}
                   </span>
-                  <span className="absolute top-2.5 right-3 px-2 py-0.5 bg-[#090807]/85 border border-[#C5A059]/35 font-fantasy text-[11px] text-[#E2C88D]">
+                  <span className="absolute top-2.5 right-3 px-2 py-0.5 bg-[#090807]/85 border border-[#C5A059]/35 font-crest text-[11px] text-[#E2C88D]">
                     {realm.band.toFixed(1)}
                   </span>
                 </div>
@@ -193,7 +193,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
                 {/* Thông tin gọn gàng phía dưới */}
                 <div className="p-4 flex-1 flex flex-col justify-between gap-3.5">
                   <div>
-                    <h3 className="font-fantasy text-lg text-[#F4EFE4] tracking-wider group-hover:text-[#E2C88D] transition-colors">
+                    <h3 className="font-crest text-lg text-[#F4EFE4] tracking-wider group-hover:text-[#E2C88D] transition-colors">
                       {realm.title}
                     </h3>
                     <p className="text-xs text-[#968D80] mt-0.5">{realm.vi}</p>
@@ -268,7 +268,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="font-fantasy text-xs text-[#E2C88D]">+{q.xp} XP</p>
+                    <p className="font-crest text-xs text-[#E2C88D]">+{q.xp} XP</p>
                     <p className="text-[11px] text-[#968D80] mt-0.5">{progressText}</p>
                   </div>
                 </div>
@@ -337,7 +337,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
             {radarData.map((r) => (
               <div key={r.skill}>
                 <p className="text-[10px] uppercase tracking-wider text-[#968D80]">{r.skill.slice(0, 4)}</p>
-                <p className="font-fantasy text-sm text-[#E2C88D] mt-0.5">{r.band.toFixed(1)}</p>
+                <p className="font-crest text-sm text-[#E2C88D] mt-0.5">{r.band.toFixed(1)}</p>
               </div>
             ))}
           </div>
@@ -356,7 +356,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
               <div key={sub.id} className="p-4 bg-[#0D0C0A] border border-[#C5A059]/16">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="uppercase tracking-[0.18em] text-[#C5A059]">{sub.skill}</span>
-                  <span className="font-fantasy text-[#E2C88D]">Band ~{sub.bandEstimate.toFixed(1)}</span>
+                  <span className="font-crest text-[#E2C88D]">Band ~{sub.bandEstimate.toFixed(1)}</span>
                 </div>
                 <p className="text-sm font-medium text-[#ECE6D8] mt-1.5 line-clamp-1">{sub.promptTitle}</p>
                 <p className="text-xs text-[#968D80] mt-1 line-clamp-2">{sub.content}</p>

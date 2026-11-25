@@ -1,9 +1,10 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Cinzel", "Cormorant Garamond", Georgia, serif;
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-crest: "Cinzel", "Cormorant Garamond", Georgia, serif;
   --font-editorial: "Cormorant Garamond", Georgia, serif;
-  --font-sans: "Be Vietnam Pro", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: "Be Vietnam Pro", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 
   --color-ash: #090807;
   --color-basalt: #12100e;
@@ -33,6 +34,11 @@
   h3,
   .font-fantasy {
     font-family: var(--font-display);
+    font-weight: 600;
+  }
+
+  .font-crest {
+    font-family: var(--font-crest);
   }
 
   .font-editorial {

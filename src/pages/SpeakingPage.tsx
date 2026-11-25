@@ -3,10 +3,12 @@ import {
   AlertCircle,
   Check,
   Clock,
+  FileAudio,
   Loader2,
   Mic,
   Play,
   Square,
+  Trash2,
   Volume2,
   Wand2,
 } from 'lucide-react';
@@ -20,7 +22,7 @@ import {
   stopSpeaking,
   type SpeechRecognitionInstance,
 } from '../lib/speech';
-import { evaluateWithGemini } from '../lib/gemini';
+import { evaluateWithGemini, transcribeAudioWithGemini } from '../lib/gemini';
 import { AIFeedbackCard } from '../components/AIFeedbackCard';
 import { SpeakingBrazierArt } from '../components/DarkArtworks';
 import type { AIFeedbackResult, NavTab } from '../types';
@@ -40,7 +42,12 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
 
   const [isRecording, setIsRecording] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [transcript, setTranscript] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [sttStatus, setSttStatus] = useState<'idle' | 'listening' | 'unsupported' | 'error'>('idle');
+  const [sttNote, setSttNote] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [errorNeedsAiSettings, setErrorNeedsAiSettings] = useState(false);
   const [showSample, setShowSample] = useState(false);
@@ -53,11 +60,27 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
   const activeStreamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const isRecordingRef = useRef(false);
+  const interimTranscriptRef = useRef('');
+  const sttFatalErrorRef = useRef(false);
+  const sttRestartTimerRef = useRef<number | null>(null);
+  const sttFlushTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(0);
   const aiRequestIdRef = useRef(0);
   const audioUrlRef = useRef<string | null>(null);
 
   const lesson = SPEAKING_LESSONS.find((l) => l.id === selectedId) ?? SPEAKING_LESSONS[0];
+
+  const clearSttTimers = useCallback(() => {
+    if (sttRestartTimerRef.current !== null) {
+      window.clearTimeout(sttRestartTimerRef.current);
+      sttRestartTimerRef.current = null;
+    }
+    if (sttFlushTimerRef.current !== null) {
+      window.clearTimeout(sttFlushTimerRef.current);
+      sttFlushTimerRef.current = null;
+    }
+  }, []);
 
   const clearAudioUrl = useCallback(() => {
     if (audioUrlRef.current) {
@@ -65,44 +88,92 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
       audioUrlRef.current = null;
     }
     setAudioUrl(null);
+    setAudioBlob(null);
   }, []);
 
-  const stopRecordingCleanup = useCallback((invalidateSession = false) => {
-    if (invalidateSession) {
-      sessionIdRef.current += 1;
-    }
+  const stopRecordingCleanup = useCallback(
+    (invalidateSession = false) => {
+      isRecordingRef.current = false;
+      clearSttTimers();
 
-    const recorder = mediaRecorderRef.current;
-    mediaRecorderRef.current = null;
-    let willFireOnStop = false;
-    if (recorder && recorder.state !== 'inactive') {
-      try {
-        recorder.stop();
-        willFireOnStop = true;
-      } catch {
-        // ignore stop errors
+      if (invalidateSession) {
+        sessionIdRef.current += 1;
       }
-    }
 
-    if ((invalidateSession || !willFireOnStop) && activeStreamRef.current) {
-      activeStreamRef.current.getTracks().forEach((t) => t.stop());
-      activeStreamRef.current = null;
-    }
+      const recorder = mediaRecorderRef.current;
+      mediaRecorderRef.current = null;
+      let willFireOnStop = false;
+      if (recorder && recorder.state !== 'inactive') {
+        try {
+          recorder.stop();
+          willFireOnStop = true;
+        } catch {
+          // ignore stop errors
+        }
+      }
 
-    if (recognitionRef.current) {
+      if ((invalidateSession || !willFireOnStop) && activeStreamRef.current) {
+        activeStreamRef.current.getTracks().forEach((t) => t.stop());
+        activeStreamRef.current = null;
+      }
+
       const rec = recognitionRef.current;
-      recognitionRef.current = null;
-      rec.onresult = null;
-      rec.onerror = null;
-      rec.onend = null;
-      try {
-        rec.stop();
-      } catch {
-        // ignore
+      if (rec) {
+        if (invalidateSession) {
+          recognitionRef.current = null;
+          rec.onresult = null;
+          rec.onerror = null;
+          rec.onend = null;
+          try {
+            if (rec.abort) {
+              rec.abort();
+            } else {
+              rec.stop();
+            }
+          } catch {
+            // ignore
+          }
+          interimTranscriptRef.current = '';
+          setInterimTranscript('');
+          setSttStatus('idle');
+          setSttNote(null);
+        } else {
+          // Giữ nguyên onresult/onend để hứng đoạn chữ cuối cùng khi gọi rec.stop()
+          try {
+            rec.stop();
+          } catch {
+            if (recognitionRef.current === rec) {
+              recognitionRef.current = null;
+            }
+          }
+          sttFlushTimerRef.current = window.setTimeout(() => {
+            sttFlushTimerRef.current = null;
+            const leftover = interimTranscriptRef.current.trim();
+            if (leftover) {
+              setTranscript((prev) => `${prev.trim()} ${leftover}`.trim());
+              interimTranscriptRef.current = '';
+              setInterimTranscript('');
+            }
+            if (recognitionRef.current === rec) {
+              rec.onresult = null;
+              rec.onerror = null;
+              rec.onend = null;
+              recognitionRef.current = null;
+            }
+            setSttStatus((prev) => (prev === 'listening' ? 'idle' : prev));
+          }, 1200);
+        }
+      } else if (invalidateSession) {
+        interimTranscriptRef.current = '';
+        setInterimTranscript('');
+        setSttStatus('idle');
+        setSttNote(null);
       }
-    }
-    setIsRecording(false);
-  }, []);
+
+      setIsRecording(false);
+    },
+    [clearSttTimers]
+  );
 
   // Reset trạng thái khi đổi bài hoặc unmount
   useEffect(() => {
@@ -113,6 +184,10 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
     setPhase('idle');
     setSecondsLeft(lesson.prepSeconds);
     setTranscript('');
+    setInterimTranscript('');
+    setSttStatus('idle');
+    setSttNote(null);
+    setTranscribing(false);
     setErrorMsg(null);
     setErrorNeedsAiSettings(false);
     setShowSample(false);
@@ -170,6 +245,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
 
     // Dừng phiên cũ (nếu có) và tạo sessionId mới để chống race condition
     stopRecordingCleanup(true);
+    sttFatalErrorRef.current = false;
     const currentSession = ++sessionIdRef.current;
 
     let stream: MediaStream | null = null;
@@ -209,9 +285,11 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
         }
         audioUrlRef.current = url;
         setAudioUrl(url);
+        setAudioBlob(blob);
       };
 
       recorder.onerror = () => {
+        isRecordingRef.current = false;
         stream?.getTracks().forEach((t) => t.stop());
         if (currentSession === sessionIdRef.current) {
           setIsRecording(false);
@@ -222,6 +300,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
 
       recorder.start();
       mediaRecorderRef.current = recorder;
+      isRecordingRef.current = true;
       setIsRecording(true);
       setPhase('speaking');
       setSecondsLeft(lesson.speakSeconds);
@@ -233,37 +312,122 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
           rec.lang = 'en-US';
           // Tránh continuous = true trên iOS WebKit gây treo micro hoặc xung đột MediaRecorder
           rec.continuous = !isIOSWebKit();
-          rec.interimResults = false;
+          rec.interimResults = true;
+          rec.maxAlternatives = 1;
+
           rec.onresult = (event) => {
             if (currentSession !== sessionIdRef.current) return;
-            let added = '';
+            let finalAdded = '';
+            let interimAdded = '';
             for (let i = event.resultIndex; i < event.results.length; i++) {
-              if (event.results[i].isFinal) {
-                added += `${event.results[i][0].transcript} `;
+              const result = event.results[i];
+              const piece = result[0]?.transcript ?? '';
+              if (!piece) continue;
+              if (result.isFinal) {
+                finalAdded += `${piece} `;
+              } else {
+                interimAdded += `${piece} `;
               }
             }
-            if (added.trim()) {
-              setTranscript((prev) => `${prev.trim()} ${added.trim()}`.trim());
+            if (finalAdded.trim()) {
+              setTranscript((prev) => `${prev.trim()} ${finalAdded.trim()}`.trim());
+            }
+            const cleanInterim = interimAdded.trim();
+            interimTranscriptRef.current = cleanInterim;
+            setInterimTranscript(cleanInterim);
+          };
+
+          rec.onerror = (event) => {
+            if (currentSession !== sessionIdRef.current) return;
+            const err = event?.error;
+            if (err === 'no-speech' || err === 'aborted') {
+              return;
+            }
+            sttFatalErrorRef.current = true;
+            if (sttRestartTimerRef.current !== null) {
+              window.clearTimeout(sttRestartTimerRef.current);
+              sttRestartTimerRef.current = null;
+            }
+            setSttStatus('error');
+            if (err === 'network') {
+              setSttNote(
+                'Trình duyệt không kết nối được dịch vụ nhận dạng giọng nói trực tiếp (lỗi mạng/chặn trên Edge/Safari). Bản thu âm vẫn thu bình thường — hãy bấm "Chép lời từ bản thu (AI)" hoặc "AI Chấm Speaking" sau khi dừng.'
+              );
+            } else if (err === 'not-allowed' || err === 'service-not-allowed' || err === 'audio-capture') {
+              setSttNote(
+                'Trình duyệt từ chối hoặc xung đột micro cho nhận dạng trực tiếp (thường gặp trên iOS Safari khi thu âm). Bản thu âm vẫn hoạt động — hãy bấm "Chép lời từ bản thu (AI)" hoặc "AI Chấm Speaking" sau khi dừng.'
+              );
+            } else {
+              setSttNote(
+                `Nhận dạng giọng nói trực tiếp tạm ngưng (${err || 'lỗi không xác định'}). Bản thu âm vẫn thu bình thường — hãy bấm "Chép lời từ bản thu (AI)" sau khi dừng.`
+              );
             }
           };
-          rec.onerror = () => {
-            // Không phá hỏng bản ghi âm MediaRecorder nếu SpeechRecognition bị từ chối/ngắt trên WebKit
-            if (recognitionRef.current === rec) {
-              recognitionRef.current = null;
-            }
-          };
+
           rec.onend = () => {
-            if (recognitionRef.current === rec) {
-              recognitionRef.current = null;
+            if (currentSession !== sessionIdRef.current) {
+              if (recognitionRef.current === rec) {
+                recognitionRef.current = null;
+              }
+              return;
+            }
+            const leftover = interimTranscriptRef.current.trim();
+            if (leftover) {
+              setTranscript((prev) => `${prev.trim()} ${leftover}`.trim());
+              interimTranscriptRef.current = '';
+              setInterimTranscript('');
+            }
+            if (isRecordingRef.current && !sttFatalErrorRef.current) {
+              if (sttRestartTimerRef.current !== null) {
+                window.clearTimeout(sttRestartTimerRef.current);
+              }
+              sttRestartTimerRef.current = window.setTimeout(() => {
+                sttRestartTimerRef.current = null;
+                if (!isRecordingRef.current || currentSession !== sessionIdRef.current || sttFatalErrorRef.current) {
+                  return;
+                }
+                try {
+                  rec.start();
+                } catch {
+                  if (recognitionRef.current === rec) {
+                    recognitionRef.current = null;
+                  }
+                  setSttStatus('error');
+                  setSttNote(
+                    'Trình duyệt không giữ được nhận dạng trực tiếp khi đang ghi âm. Sau khi bấm DỪNG, hãy dùng nút "Chép lời từ bản thu (AI)" hoặc "AI Chấm Speaking".'
+                  );
+                }
+              }, 250);
+            } else {
+              if (sttFlushTimerRef.current !== null) {
+                window.clearTimeout(sttFlushTimerRef.current);
+                sttFlushTimerRef.current = null;
+              }
+              if (recognitionRef.current === rec) {
+                recognitionRef.current = null;
+              }
+              setSttStatus((prev) => (prev === 'listening' ? 'idle' : prev));
             }
           };
+
           rec.start();
           recognitionRef.current = rec;
+          setSttStatus('listening');
+          setSttNote(null);
         } catch {
-          // SpeechRecognition fallback — người dùng vẫn có bản ghi âm và ô Transcript
+          setSttStatus('error');
+          setSttNote(
+            'Không thể bật nhận dạng chữ trực tiếp trên trình duyệt này. Bản thu âm vẫn chạy bình thường — hãy bấm "Chép lời từ bản thu (AI)" sau khi dừng.'
+          );
         }
+      } else {
+        setSttStatus('unsupported');
+        setSttNote(
+          'Trình duyệt này không hỗ trợ chuyển giọng nói trực tiếp khi đang thu. Hãy thu âm xong rồi bấm "Chép lời từ bản thu (AI)" hoặc "AI Chấm Speaking".'
+        );
       }
     } catch {
+      isRecordingRef.current = false;
       if (stream) {
         stream.getTracks().forEach((t) => t.stop());
       }
@@ -311,10 +475,50 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
     setNotice(`Hoàn thành luyện nói và cộng +${lesson.xpReward} XP.`);
   };
 
+  const handleTranscribeAudio = async () => {
+    if (!audioBlob) return;
+    setErrorMsg(null);
+    setErrorNeedsAiSettings(false);
+    setNotice(null);
+    if (!geminiApiKey) {
+      setErrorMsg('Bạn chưa nhập Gemini API Key trong mục Cài đặt.');
+      setErrorNeedsAiSettings(true);
+      return;
+    }
+    const reqId = ++aiRequestIdRef.current;
+    const currentBlob = audioBlob;
+    const currentLesson = lesson;
+    setTranscribing(true);
+    try {
+      const text = await transcribeAudioWithGemini({
+        apiKey: geminiApiKey,
+        audioBlob: currentBlob,
+        promptHint: currentLesson.title,
+      });
+      if (reqId !== aiRequestIdRef.current) return;
+      setTranscript(text);
+      setSttNote(null);
+      setNotice('Đã chép lời từ bản ghi âm bằng Gemini AI. Bạn có thể kiểm tra lại hoặc bấm AI Chấm Speaking.');
+    } catch (err) {
+      if (reqId !== aiRequestIdRef.current) return;
+      const msg = err instanceof Error ? err.message : 'Lỗi chép lời từ bản ghi âm.';
+      setErrorMsg(msg);
+      if (/api key|khóa/i.test(msg)) {
+        setErrorNeedsAiSettings(true);
+      }
+    } finally {
+      if (reqId === aiRequestIdRef.current) {
+        setTranscribing(false);
+      }
+    }
+  };
+
   const handleEvaluateAI = async () => {
     setErrorNeedsAiSettings(false);
-    if (transcript.trim().split(/\s+/).filter(Boolean).length < 12) {
-      setErrorMsg('Hãy nói hoặc nhập ít nhất 12 từ vào ô Transcript để AI chấm điểm Speaking.');
+    const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
+    const hasAudio = Boolean(audioBlob && audioBlob.size > 0);
+    if (!hasAudio && wordCount < 12) {
+      setErrorMsg('Hãy thu âm giọng nói hoặc nhập ít nhất 12 từ vào ô Transcript để AI chấm điểm Speaking.');
       return;
     }
     if (!geminiApiKey) {
@@ -325,8 +529,10 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
     const reqId = ++aiRequestIdRef.current;
     const currentLesson = lesson;
     const currentTranscript = transcript;
+    const currentAudioBlob = audioBlob;
     setAiLoading(true);
     setErrorMsg(null);
+    setNotice(null);
     try {
       const result = await evaluateWithGemini({
         apiKey: geminiApiKey,
@@ -335,8 +541,14 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
         promptText: `${currentLesson.questions.join('\n')}${currentLesson.cueCardBullets ? `\nCue card: ${currentLesson.cueCardBullets.join(', ')}` : ''}`,
         userResponse: currentTranscript,
         targetBand: profile.targetBand,
+        audioBlob: currentAudioBlob,
       });
       if (reqId !== aiRequestIdRef.current) return;
+      const effectiveTranscript =
+        result.transcriptEn && wordCount < 12 ? result.transcriptEn : currentTranscript.trim() || result.transcriptEn || '';
+      if (result.transcriptEn && wordCount < 12) {
+        setTranscript(result.transcriptEn);
+      }
       setAiFeedback(result);
       completeLesson(
         currentLesson.id,
@@ -349,7 +561,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
         skill: 'speaking',
         promptId: currentLesson.id,
         promptTitle: currentLesson.title,
-        content: currentTranscript,
+        content: effectiveTranscript || '[Speaking Audio Submission]',
         bandEstimate: result.overallBand,
         aiFeedback: result,
       });
@@ -562,21 +774,73 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
             </div>
 
             {audioUrl && (
-              <div className="p-3.5 bg-[#0B0A08] border border-[#4E8A6E]/40 space-y-2">
-                <p className="text-xs font-semibold text-[#7BC2A0]">Bản ghi âm của bạn:</p>
+              <div className="p-3.5 bg-[#0B0A08] border border-[#4E8A6E]/40 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-[#7BC2A0]">Bản ghi âm của bạn:</p>
+                  {audioBlob && (
+                    <button
+                      onClick={handleTranscribeAudio}
+                      disabled={transcribing || aiLoading}
+                      className="btn-ghost-brass px-3 py-1 text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                    >
+                      {transcribing ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang chép lời...
+                        </>
+                      ) : (
+                        <>
+                          <FileAudio className="w-3.5 h-3.5" /> Chép lời từ bản thu (AI)
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
                 <audio controls src={audioUrl} className="w-full h-10" />
               </div>
             )}
 
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#968D80]">
-                Transcript (Tự chuyển giọng nói hoặc gõ để AI chấm)
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#968D80]">
+                  Transcript (Hiện chữ khi nói hoặc chép từ bản thu)
+                </label>
+                {transcript.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTranscript('');
+                      setInterimTranscript('');
+                      interimTranscriptRef.current = '';
+                    }}
+                    className="text-[11px] text-[#968D80] hover:text-[#E2C88D] flex items-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" /> Xóa chữ
+                  </button>
+                )}
+              </div>
+
+              {isRecording && sttStatus === 'listening' && (
+                <div className="px-3 py-2 bg-[#0B0A08] border border-[#C5A059]/30 text-xs text-[#E2C88D] flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-[#B83B47] animate-pulse shrink-0" />
+                  <span className="truncate">
+                    {interimTranscript
+                      ? `Đang nghe: "${interimTranscript}"`
+                      : 'Đang lắng nghe giọng nói tiếng Anh của bạn...'}
+                  </span>
+                </div>
+              )}
+
+              {sttNote && (
+                <div className="p-2.5 bg-[#0B0A08] border border-[#C5A059]/30 text-[11px] text-[#C8BFB0] leading-relaxed">
+                  {sttNote}
+                </div>
+              )}
+
               <textarea
                 value={transcript}
                 onChange={(e) => setTranscript(e.target.value)}
                 rows={4}
-                placeholder="Nội dung bạn nói sẽ xuất hiện tại đây..."
+                placeholder="Nội dung bạn nói sẽ xuất hiện tại đây (hoặc bấm 'Chép lời từ bản thu (AI)' sau khi thu xong)..."
                 className="w-full bg-[#090807] border border-[#C5A059]/22 focus:border-[#E2C88D] focus:outline-none p-3.5 text-base sm:text-sm text-[#ECE6D8]"
               />
             </div>
@@ -608,7 +872,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
             <div className="flex flex-wrap gap-3">
               <button
                 onClick={handleEvaluateAI}
-                disabled={aiLoading}
+                disabled={aiLoading || transcribing}
                 className="flex-1 min-w-[190px] btn-crimson py-3 px-4 text-xs uppercase tracking-[0.14em] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
               >
                 {aiLoading ? (

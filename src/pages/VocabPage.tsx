@@ -498,7 +498,7 @@ export function VocabPage() {
           <p className="text-[10px] uppercase tracking-[0.18em] text-[#968D80]">
             Cần ôn ({isKorean ? 'KO' : 'EN'})
           </p>
-          <p className={`font-fantasy text-2xl mt-1 ${isKorean ? 'text-[#7BC2A0]' : 'text-[#E2C88D]'}`}>
+          <p className={`font-crest text-2xl mt-1 ${isKorean ? 'text-[#7BC2A0]' : 'text-[#E2C88D]'}`}>
             {dueCards.length}
           </p>
         </div>
@@ -506,11 +506,11 @@ export function VocabPage() {
           <p className="text-[10px] uppercase tracking-[0.18em] text-[#968D80]">
             Đang học ({isKorean ? 'KO' : 'EN'})
           </p>
-          <p className="font-fantasy text-2xl text-[#ECE6D8] mt-1">{savedLangItems.length}</p>
+          <p className="font-crest text-2xl text-[#ECE6D8] mt-1">{savedLangItems.length}</p>
         </div>
         <div className="p-4 text-center">
           <p className="text-[10px] uppercase tracking-[0.18em] text-[#968D80]">Đã nhớ vững</p>
-          <p className="font-fantasy text-2xl text-[#7BC2A0] mt-1">{masteredCount}</p>
+          <p className="font-crest text-2xl text-[#7BC2A0] mt-1">{masteredCount}</p>
         </div>
       </div>
 
@@ -579,7 +579,7 @@ export function VocabPage() {
                         </h2>
 
                         {(!isKorean || showRomanization) && (currentCard.romanization || currentCard.ipa) && (
-                          <p className={`font-editorial italic text-lg ${isKorean ? 'text-[#7BC2A0]' : 'text-[#C5A059]'}`}>
+                          <p className={`font-sans text-base sm:text-lg ${isKorean ? 'text-[#7BC2A0]' : 'text-[#C5A059]'}`}>
                             {currentCard.ipa || `[${currentCard.romanization}]`}
                           </p>
                         )}
@@ -852,7 +852,7 @@ export function VocabPage() {
                               {v.word}
                             </span>
                             {(v.ipa || v.romanization) && (
-                              <span className={`font-editorial italic text-sm ${isKorean ? 'text-[#7BC2A0]' : 'text-[#C5A059]'}`}>
+                              <span className={`font-sans text-xs sm:text-sm ${isKorean ? 'text-[#7BC2A0]' : 'text-[#C5A059]'}`}>
                                 {v.ipa || `[${v.romanization}]`}
                               </span>
                             )}

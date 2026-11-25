@@ -72,7 +72,7 @@ export default defineConfig({
                 statuses: [0, 200],
               },
               expiration: {
-                maxEntries: 30,
+                maxEntries: 150,
                 maxAgeSeconds: 60 * 60 * 24 * 365,
               },
             },

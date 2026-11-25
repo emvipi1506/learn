@@ -68,7 +68,7 @@ export function Layout({ activeTab, onSelectTab, children }: LayoutProps) {
         <div className="px-6 py-6 border-b border-[#C5A059]/15 flex items-center gap-3">
           <GrimoireCrest className="w-9 h-9 shrink-0" />
           <div>
-            <p className="font-fantasy text-base font-semibold tracking-[0.26em] text-[#E2C88D] leading-none">
+            <p className="font-crest text-base font-semibold tracking-[0.26em] text-[#E2C88D] leading-none">
               GRIMOIRE
             </p>
             <p className="text-[10px] uppercase tracking-[0.22em] text-[#968D80] mt-1.5">
@@ -110,7 +110,7 @@ export function Layout({ activeTab, onSelectTab, children }: LayoutProps) {
 
           <div className="flex items-baseline justify-between pt-1 text-xs">
             <span className="text-[#968D80]">Band hiện tại</span>
-            <span className="font-fantasy text-sm text-[#E2C88D]">
+            <span className="font-crest text-sm text-[#E2C88D]">
               {profile.currentBand.toFixed(1)}
               <span className="text-[#968D80] text-xs font-sans"> / {profile.targetBand.toFixed(1)}</span>
             </span>
@@ -151,7 +151,7 @@ export function Layout({ activeTab, onSelectTab, children }: LayoutProps) {
                           {dueVocabCount}
                         </span>
                       ) : item.roman ? (
-                        <span className="font-fantasy text-[10px] text-[#968D80]/60">{item.roman}</span>
+                        <span className="font-crest text-[10px] text-[#968D80]/60">{item.roman}</span>
                       ) : null}
                     </button>
                   );
@@ -208,7 +208,7 @@ export function Layout({ activeTab, onSelectTab, children }: LayoutProps) {
           <div className="flex items-center gap-2.5">
             <GrimoireCrest className="w-7 h-7" />
             <div>
-              <p className="font-fantasy text-xs font-semibold tracking-[0.24em] text-[#E2C88D] leading-none">
+              <p className="font-crest text-xs font-semibold tracking-[0.24em] text-[#E2C88D] leading-none">
                 GRIMOIRE
               </p>
               <p className="text-[10px] text-[#968D80] mt-1">
@@ -223,7 +223,7 @@ export function Layout({ activeTab, onSelectTab, children }: LayoutProps) {
               {profile.streakDays}
             </span>
             <span className="h-3.5 w-[1px] bg-[#C5A059]/25" />
-            <span className="font-fantasy text-[11px] tracking-wider text-[#ECE6D8]">
+            <span className="font-crest text-[11px] tracking-wider text-[#ECE6D8]">
               LV.{profile.level}
             </span>
           </div>
@@ -279,9 +279,9 @@ export function Layout({ activeTab, onSelectTab, children }: LayoutProps) {
                   >
                     <div className="flex items-center justify-between">
                       <Icon className="w-4 h-4 text-[#C5A059]" />
-                      <span className="font-fantasy text-[10px] text-[#968D80]">{s.roman}</span>
+                      <span className="font-crest text-[10px] text-[#968D80]">{s.roman}</span>
                     </div>
-                    <p className="font-fantasy text-sm text-[#ECE6D8] mt-2.5">{s.name}</p>
+                    <p className="font-crest text-sm text-[#ECE6D8] mt-2.5">{s.name}</p>
                     <p className="text-[11px] text-[#968D80] mt-0.5">{s.vi}</p>
                   </button>
                 );
@@ -327,7 +327,7 @@ export function Layout({ activeTab, onSelectTab, children }: LayoutProps) {
                   : 'bg-[#161310] border-[#C5A059] text-[#E2C88D]'
               }`}
             >
-              <span className="-rotate-45 font-fantasy text-xs font-bold">IV</span>
+              <span className="-rotate-45 font-crest text-xs font-bold">IV</span>
             </div>
             <span className="mt-0.5">Kỹ năng</span>
           </button>
