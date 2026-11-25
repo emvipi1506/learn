@@ -9,7 +9,15 @@ const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 
 export function cleanAudioMimeType(mimeType: string): string {
   const base = mimeType.split(';')[0].trim().toLowerCase();
+  if (base === 'video/mp4') return 'audio/mp4';
   if (base.startsWith('audio/')) return base;
+  if (!base && typeof navigator !== 'undefined') {
+    const ua = navigator.userAgent || '';
+    const isWebKit =
+      /iP(hone|ad|od)/i.test(ua) ||
+      (/AppleWebKit/i.test(ua) && !/Chrome|Chromium|Edg\//i.test(ua));
+    if (isWebKit) return 'audio/mp4';
+  }
   return 'audio/webm';
 }
 
@@ -160,7 +168,10 @@ async function callGeminiGenerateContent(params: {
 
   let response: Response;
   try {
-    const generationConfig: Record<string, unknown> = { temperature };
+    const generationConfig: Record<string, unknown> = {
+      temperature,
+      thinkingConfig: { thinkingBudget: 0 },
+    };
     if (responseMimeType) {
       generationConfig.responseMimeType = responseMimeType;
     }
@@ -194,15 +205,61 @@ async function callGeminiGenerateContent(params: {
 
   if (!response.ok) {
     const errText = await response.text();
-    if (response.status === 400 || response.status === 401 || response.status === 403) {
+    if (
+      response.status === 401 ||
+      response.status === 403 ||
+      /api_key_invalid|api key not valid/i.test(errText)
+    ) {
       throw new Error('Gemini API Key không hợp lệ hoặc chưa được cấp quyền. Hãy kiểm tra lại trong mục Cài đặt.');
+    }
+    if (response.status === 400) {
+      throw new Error(
+        'Yêu cầu hoặc định dạng âm thanh gửi lên Gemini AI chưa hợp lệ (400). Hãy thử thu lại hoặc gõ transcript.'
+      );
+    }
+    if (response.status === 429) {
+      throw new Error('Đã vượt quá hạn mức gọi Gemini API (429). Vui lòng đợi một lát rồi thử lại.');
+    }
+    if (response.status === 500 || response.status === 503) {
+      throw new Error(`Máy chủ Gemini AI đang quá tải hoặc gặp sự cố (${response.status}). Vui lòng thử lại sau ít phút.`);
     }
     throw new Error(`Lỗi kết nối Gemini API (${response.status}): ${errText.slice(0, 160)}`);
   }
 
-  const data = await response.json();
+  let data: {
+    promptFeedback?: { blockReason?: string };
+    candidates?: Array<{
+      finishReason?: string;
+      content?: { parts?: Array<{ text?: string }> };
+    }>;
+  };
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error('Máy chủ Gemini AI trả về dữ liệu JSON không hợp lệ. Vui lòng thử lại.');
+  }
+
+  const blockReason = data?.promptFeedback?.blockReason;
+  if (blockReason) {
+    throw new Error(
+      `Nội dung gửi lên bị bộ lọc an toàn của AI chặn (${blockReason}). Hãy điều chỉnh lại nội dung.`
+    );
+  }
+
+  const candidate = data?.candidates?.[0];
+  const finishReason = candidate?.finishReason;
+  if (finishReason === 'SAFETY') {
+    throw new Error('Phản hồi từ AI bị chặn bởi bộ lọc an toàn (SAFETY). Hãy chỉnh sửa nội dung và thử lại.');
+  }
+  if (finishReason === 'RECITATION') {
+    throw new Error('Phản hồi từ AI bị chặn do trùng lặp tài liệu (RECITATION). Hãy diễn đạt lại theo ý của bạn.');
+  }
+  if (finishReason === 'MAX_TOKENS') {
+    throw new Error('Phản hồi từ AI bị cắt ngắn do vượt giới hạn độ dài (MAX_TOKENS). Vui lòng thử lại.');
+  }
+
   return (
-    data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text || '').join('\n') || ''
+    candidate?.content?.parts?.map((p) => p.text || '').join('\n') || ''
   );
 }
 

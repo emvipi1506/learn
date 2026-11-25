@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  cleanAudioMimeType,
   evaluateWithGemini,
   extractJsonObject,
   parseAndNormalizeGeminiFeedback,
@@ -190,5 +191,104 @@ describe('Gemini AI Parser & Security (gemini.ts)', () => {
         audioBlob: blob,
       })
     ).rejects.toThrow(/Không nghe rõ lời nói/i);
+  });
+
+  it('cleanAudioMimeType chuẩn hóa video/mp4 và fallback WebKit an toàn', () => {
+    expect(cleanAudioMimeType('video/mp4')).toBe('audio/mp4');
+    expect(cleanAudioMimeType('audio/mp4;codecs=mp4a.40.2')).toBe('audio/mp4');
+    expect(cleanAudioMimeType('audio/webm;codecs=opus')).toBe('audio/webm');
+    vi.stubGlobal('navigator', {
+      userAgent:
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+    });
+    expect(cleanAudioMimeType('')).toBe('audio/mp4');
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36',
+    });
+    expect(cleanAudioMimeType('')).toBe('audio/webm');
+  });
+
+  it('phân biệt lỗi HTTP 400 / 401 / 429 / 503 và API_KEY_INVALID thay vì gộp chung', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: async () => 'Invalid audio payload',
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: async () => '{"error":{"status":"INVALID_ARGUMENT","message":"API key not valid"}}',
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () => 'Quota exceeded',
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => 'Service unavailable',
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const call = () =>
+      evaluateWithGemini({
+        apiKey: 'AIza-test',
+        skill: 'writing',
+        promptTitle: 'Test',
+        promptText: 'Prompt',
+        userResponse: 'Enough words for writing evaluation test.',
+      });
+
+    await expect(call()).rejects.toThrow(/định dạng âm thanh.*400/i);
+    await expect(call()).rejects.toThrow(/API Key không hợp lệ/i);
+    await expect(call()).rejects.toThrow(/hạn mức.*429/i);
+    await expect(call()).rejects.toThrow(/quá tải.*503/i);
+  });
+
+  it('bắt lỗi response.json() hỏng và kiểm tra promptFeedback.blockReason / finishReason', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => {
+          throw new SyntaxError('Unexpected end of JSON');
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          promptFeedback: { blockReason: 'SAFETY' },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: '{"partial":' }] } }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          candidates: [{ finishReason: 'SAFETY', content: { parts: [] } }],
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const call = () =>
+      evaluateWithGemini({
+        apiKey: 'AIza-test',
+        skill: 'writing',
+        promptTitle: 'Test',
+        promptText: 'Prompt',
+        userResponse: 'Enough words for writing evaluation test.',
+      });
+
+    await expect(call()).rejects.toThrow(/JSON không hợp lệ/i);
+    await expect(call()).rejects.toThrow(/bộ lọc an toàn/i);
+    await expect(call()).rejects.toThrow(/MAX_TOKENS/i);
+    await expect(call()).rejects.toThrow(/SAFETY/i);
   });
 });

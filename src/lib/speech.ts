@@ -144,6 +144,20 @@ export function splitTextForTTS(text: string, maxChars = 160): string[] {
 }
 
 /**
+ * Làm sạch câu ví dụ tiếng Hàn trước khi đọc TTS (loại bỏ nhãn hội thoại 가:/나:, dấu =, chú thích tiếng Việt)
+ */
+export function cleanKoreanExampleForTTS(text: string): string {
+  return text
+    .replace(/(?:^|[\s/])(가|나)\s*:\s*/g, ' ')
+    .replace(/\([^)]*[a-zA-ZÀ-ỹà-ỹ][^)]*\)/g, ' ')
+    .replace(/\(([^)]*)\)/g, '$1')
+    .replace(/\s*[=/→]\s*/g, '. ')
+    .replace(/\.{2,}/g, '.')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Chuẩn hóa nội dung đọc TTS cho thẻ từ vựng / ngữ pháp (đặc biệt cho tiếng Hàn Sejong 1)
  */
 export function getSpeakableText(
@@ -152,23 +166,31 @@ export function getSpeakableText(
   const lang = card.lang ?? 'en';
   if (lang !== 'ko') return card.word.trim();
 
-  // Với thẻ ngữ pháp tiếng Hàn, đọc trực tiếp câu ví dụ Hangul tự nhiên thay vì lọc ký hiệu N1/N2/V/A
-  if (card.pos.trim().toLowerCase() === 'ngữ pháp') {
+  const pos = card.pos.trim().toLowerCase();
+  // Với thẻ ngữ pháp hoặc biểu đạt có placeholder (명사)/(운동)/(시간)..., đọc trực tiếp câu ví dụ Hangul đã làm sạch
+  if (pos === 'ngữ pháp' || (pos === 'biểu đạt' && /\([^)]+\)|=/.test(card.word))) {
     const example = card.exampleEn?.trim();
-    if (example) return example;
+    if (example) {
+      const cleanedExample = cleanKoreanExampleForTTS(example);
+      if (cleanedExample && /[가-힣]/.test(cleanedExample)) {
+        return cleanedExample;
+      }
+    }
   }
 
   const cleaned = card.word
     .replace(/\b(V\/A|N\d*|V|A)\s*\+?/g, '')
     .replace(/\([^)]*\)/g, ' ')
-    .replace(/[•/~+]/g, ' ')
+    .replace(/\s*\/\s*/g, ', ')
+    .replace(/[•~+→]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
   if (cleaned && /[가-힣]/.test(cleaned)) {
     return cleaned;
   }
-  return card.exampleEn?.trim() || card.word.trim();
+  const fallbackEx = card.exampleEn?.trim();
+  return fallbackEx ? cleanKoreanExampleForTTS(fallbackEx) : card.word.trim();
 }
 
 export function stopSpeaking(): void {
@@ -269,6 +291,9 @@ export function speakText(
       options?.onError?.();
     };
 
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
     window.speechSynthesis.speak(utterance);
   };
 

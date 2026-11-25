@@ -1,4 +1,3 @@
-import React from 'react';
 import { Check, TrendingUp } from 'lucide-react';
 import type { AIFeedbackResult } from '../types';
 
@@ -20,6 +19,17 @@ export function AIFeedbackCard({ feedback }: { feedback: AIFeedbackResult }) {
           </p>
         </div>
       </div>
+
+      {feedback.transcriptEn && (
+        <div className="p-4 bg-[#0D0C0A] border-l-2 border-[#4E8A6E]">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#7BC2A0] mb-1.5">
+            Lời nói AI nghe được từ bản thu (Transcript)
+          </p>
+          <p className="text-sm text-[#ECE6D8] leading-relaxed whitespace-pre-line">
+            {feedback.transcriptEn}
+          </p>
+        </div>
+      )}
 
       {/* 4 Tiêu chí IELTS */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

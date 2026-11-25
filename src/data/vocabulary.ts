@@ -86,6 +86,18 @@ export const VOCABULARY_BANK: VocabItem[] = [
     act: 1,
     topic: 'Tài chính',
   },
+  {
+    id: 'v_foundation',
+    word: 'foundation',
+    ipa: '/faʊnˈdeɪ.ʃən/',
+    pos: 'n',
+    meaningVi: 'nền tảng vững chắc',
+    exampleEn: 'Daily twenty-minute practice creates a solid foundation for IELTS.',
+    exampleVi: 'Luyện tập 20 phút mỗi ngày tạo ra nền tảng vững chắc cho IELTS.',
+    paraphrases: ['basis', 'groundwork', 'cornerstone'],
+    act: 1,
+    topic: 'Học tập',
+  },
 
   // === CHƯƠNG II: TIỀN IELTS (4.0 -> 5.0) ===
   {
@@ -171,6 +183,18 @@ export const VOCABULARY_BANK: VocabItem[] = [
     paraphrases: ['method', 'strategy', 'way'],
     act: 2,
     topic: 'Phương pháp',
+  },
+  {
+    id: 'v_skimming',
+    word: 'skimming',
+    ipa: '/ˈskɪm.ɪŋ/',
+    pos: 'n',
+    meaningVi: 'đọc lướt lấy ý chính',
+    exampleEn: 'Skimming helps you grasp the main idea of a long passage in two minutes.',
+    exampleVi: 'Đọc lướt giúp bạn nắm ý chính của bài đọc dài trong hai phút.',
+    paraphrases: ['speed reading', 'quick scan', 'glancing over'],
+    act: 2,
+    topic: 'Kỹ năng đọc',
   },
 
   // === CHƯƠNG III: HỌC THUẬT IELTS (5.0 -> 6.0) ===
@@ -258,6 +282,18 @@ export const VOCABULARY_BANK: VocabItem[] = [
     act: 3,
     topic: 'Biểu đồ Task 1',
   },
+  {
+    id: 'v_ornamental',
+    word: 'ornamental',
+    ipa: '/ˌɔː.nəˈmen.təl/',
+    pos: 'adj',
+    meaningVi: 'dùng để trang trí, làm cảnh',
+    exampleEn: 'Traditional city parks often feature wide lawns and ornamental trees.',
+    exampleVi: 'Công viên truyền thống thường có bãi cỏ rộng và cây xanh trang trí.',
+    paraphrases: ['decorative', 'aesthetic'],
+    act: 3,
+    topic: 'Môi trường',
+  },
 
   // === CHƯƠNG IV: BỨT PHÁ BAND 6.5 – 7.0+ ===
   {
@@ -343,5 +379,29 @@ export const VOCABULARY_BANK: VocabItem[] = [
     paraphrases: ['driver', 'spark', 'stimulus'],
     act: 4,
     topic: 'Công nghệ & Giáo dục',
+  },
+  {
+    id: 'v_constraints',
+    word: 'constraints',
+    ipa: '/kənˈstreɪnts/',
+    pos: 'n',
+    meaningVi: 'giới hạn, khuôn khổ tự đặt ra',
+    exampleEn: 'Setting deliberate constraints helps learners stay committed to one study plan.',
+    exampleVi: 'Đặt ra giới hạn chủ động giúp người học kiên định với một lộ trình.',
+    paraphrases: ['limits', 'boundaries', 'restrictions'],
+    act: 4,
+    topic: 'Tâm lý học',
+  },
+  {
+    id: 'v_paralysis',
+    word: 'paralysis',
+    ipa: '/pəˈræl.ə.sɪs/',
+    pos: 'n',
+    meaningVi: 'sự tê liệt (không ra được quyết định)',
+    exampleEn: 'Too many study apps can trigger decision paralysis instead of steady progress.',
+    exampleVi: 'Quá nhiều ứng dụng học có thể gây tê liệt lựa chọn thay vì tiến bộ đều đặn.',
+    paraphrases: ['inaction', 'gridlock', 'hesitation'],
+    act: 4,
+    topic: 'Tâm lý học',
   },
 ];

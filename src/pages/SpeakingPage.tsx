@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -27,6 +27,36 @@ import { AIFeedbackCard } from '../components/AIFeedbackCard';
 import { SpeakingBrazierArt } from '../components/DarkArtworks';
 import type { AIFeedbackResult, NavTab } from '../types';
 
+const SPEAKING_DRAFT_PREFIX = 'grimoire_draft_speaking_';
+
+function loadSpeakingDraft(lessonId: string): string {
+  try {
+    return localStorage.getItem(`${SPEAKING_DRAFT_PREFIX}${lessonId}`) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveSpeakingDraft(lessonId: string, text: string): void {
+  try {
+    if (text.trim()) {
+      localStorage.setItem(`${SPEAKING_DRAFT_PREFIX}${lessonId}`, text);
+    } else {
+      localStorage.removeItem(`${SPEAKING_DRAFT_PREFIX}${lessonId}`);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function removeSpeakingDraft(lessonId: string): void {
+  try {
+    localStorage.removeItem(`${SPEAKING_DRAFT_PREFIX}${lessonId}`);
+  } catch {
+    // ignore storage errors
+  }
+}
+
 function isIOSWebKit(): boolean {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
@@ -36,6 +66,7 @@ function isIOSWebKit(): boolean {
 export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void }) {
   const { lessonProgress, completeLesson, geminiApiKey, addPracticeSubmission, profile } = useApp();
   const [selectedId, setSelectedId] = useState(SPEAKING_LESSONS[0].id);
+  const lesson = SPEAKING_LESSONS.find((l) => l.id === selectedId) ?? SPEAKING_LESSONS[0];
 
   const [phase, setPhase] = useState<'idle' | 'prep' | 'speaking'>('idle');
   const [secondsLeft, setSecondsLeft] = useState(SPEAKING_LESSONS[0].prepSeconds);
@@ -43,7 +74,22 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
   const [isRecording, setIsRecording] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [transcript, setTranscript] = useState('');
+  const [draftState, setDraftState] = useState<{ lessonId: string; text: string }>(() => ({
+    lessonId: SPEAKING_LESSONS[0].id,
+    text: loadSpeakingDraft(SPEAKING_LESSONS[0].id),
+  }));
+  const transcript =
+    draftState.lessonId === lesson.id ? draftState.text : loadSpeakingDraft(lesson.id);
+  const setTranscript = useCallback(
+    (updater: string | ((prev: string) => string)) => {
+      setDraftState((prev) => {
+        const base = prev.lessonId === lesson.id ? prev.text : loadSpeakingDraft(lesson.id);
+        const nextText = typeof updater === 'function' ? updater(base) : updater;
+        return { lessonId: lesson.id, text: nextText };
+      });
+    },
+    [lesson.id]
+  );
   const [interimTranscript, setInterimTranscript] = useState('');
   const [sttStatus, setSttStatus] = useState<'idle' | 'listening' | 'unsupported' | 'error'>('idle');
   const [sttNote, setSttNote] = useState<string | null>(null);
@@ -68,8 +114,6 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
   const sessionIdRef = useRef(0);
   const aiRequestIdRef = useRef(0);
   const audioUrlRef = useRef<string | null>(null);
-
-  const lesson = SPEAKING_LESSONS.find((l) => l.id === selectedId) ?? SPEAKING_LESSONS[0];
 
   const clearSttTimers = useCallback(() => {
     if (sttRestartTimerRef.current !== null) {
@@ -175,7 +219,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
     [clearSttTimers]
   );
 
-  // Reset trạng thái khi đổi bài hoặc unmount
+  // Reset trạng thái khi đổi bài hoặc unmount (giữ nháp theo bài)
   useEffect(() => {
     aiRequestIdRef.current += 1;
     stopRecordingCleanup(true);
@@ -183,7 +227,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
     stopSpeaking();
     setPhase('idle');
     setSecondsLeft(lesson.prepSeconds);
-    setTranscript('');
+    setDraftState({ lessonId: lesson.id, text: loadSpeakingDraft(lesson.id) });
     setInterimTranscript('');
     setSttStatus('idle');
     setSttNote(null);
@@ -202,6 +246,13 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
     };
   }, [lesson.id, lesson.prepSeconds, stopRecordingCleanup, clearAudioUrl]);
 
+  // Tự lưu nháp Transcript vào localStorage theo từng bài (chỉ khi draft thuộc đúng bài đang mở)
+  useEffect(() => {
+    if (draftState.lessonId === lesson.id) {
+      saveSpeakingDraft(lesson.id, draftState.text);
+    }
+  }, [lesson.id, draftState]);
+
   // Bộ đếm giây ổn định — không khởi tạo lại interval mỗi giây
   useEffect(() => {
     if (phase === 'idle') return;
@@ -211,12 +262,13 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
     return () => window.clearInterval(timer);
   }, [phase]);
 
-  // Xử lý chuyển pha và tự động dừng thu âm khi hết giờ
+  // Xử lý chuyển pha: hết giờ chuẩn bị thì về idle nhắc bấm THU ÂM; hết giờ nói thì dừng ghi âm
   useEffect(() => {
     if (phase === 'idle' || secondsLeft > 0) return;
     if (phase === 'prep') {
-      setPhase('speaking');
+      setPhase('idle');
       setSecondsLeft(lesson.speakSeconds);
+      setNotice('Hết giờ chuẩn bị! Hãy nhấn nút THU ÂM bên dưới khi bạn sẵn sàng trả lời.');
     } else if (phase === 'speaking') {
       stopRecordingCleanup(false);
       setPhase('idle');
@@ -243,8 +295,9 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
       return;
     }
 
-    // Dừng phiên cũ (nếu có) và tạo sessionId mới để chống race condition
+    // Dừng phiên cũ (nếu có), xóa bản thu cũ và tạo sessionId mới để chống race condition
     stopRecordingCleanup(true);
+    clearAudioUrl();
     sttFatalErrorRef.current = false;
     const currentSession = ++sessionIdRef.current;
 
@@ -458,21 +511,33 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
       setErrorNeedsAiSettings(false);
       return;
     }
+    if (isRecordingRef.current) {
+      stopRecordingCleanup(false);
+      setPhase('idle');
+    }
     speakText(text, { lang: 'en-GB', rate: 0.92 });
   };
 
   const handleCompletePractice = () => {
-    completeLesson(lesson.id, 'speaking', 85, lesson.xpReward, 10);
-    if (transcript.trim()) {
-      addPracticeSubmission({
-        skill: 'speaking',
-        promptId: lesson.id,
-        promptTitle: lesson.title,
-        content: transcript,
-        bandEstimate: Math.min(6.5, 4.0 + lesson.act * 0.5),
-      });
+    if (isRecording) return;
+    setErrorMsg(null);
+    setErrorNeedsAiSettings(false);
+    const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
+    const hasAudio = Boolean(audioBlob && audioBlob.size > 0);
+    if (!hasAudio && wordCount < 5) {
+      setErrorMsg('Hãy thu âm câu trả lời hoặc nhập ít nhất 5 từ vào ô Transcript trước khi bấm Hoàn Thành.');
+      return;
     }
-    setNotice(`Hoàn thành luyện nói và cộng +${lesson.xpReward} XP.`);
+    completeLesson(lesson.id, 'speaking', 85, lesson.xpReward, 10, { updateBand: false });
+    addPracticeSubmission({
+      skill: 'speaking',
+      promptId: lesson.id,
+      promptTitle: lesson.title,
+      content: transcript.trim() || '[Speaking Audio — Tự luyện]',
+      bandEstimate: 0,
+    });
+    removeSpeakingDraft(lesson.id);
+    setNotice(`Hoàn thành luyện nói và cộng +${lesson.xpReward} XP (Chế độ tự luyện không tự cộng Band — hãy dùng AI Chấm Speaking để đo Band thực tế).`);
   };
 
   const handleTranscribeAudio = async () => {
@@ -544,9 +609,12 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
         audioBlob: currentAudioBlob,
       });
       if (reqId !== aiRequestIdRef.current) return;
+      const hasNewAudio = Boolean(currentAudioBlob && currentAudioBlob.size > 0);
       const effectiveTranscript =
-        result.transcriptEn && wordCount < 12 ? result.transcriptEn : currentTranscript.trim() || result.transcriptEn || '';
-      if (result.transcriptEn && wordCount < 12) {
+        hasNewAudio && result.transcriptEn
+          ? result.transcriptEn
+          : currentTranscript.trim() || result.transcriptEn || '';
+      if (hasNewAudio && result.transcriptEn) {
         setTranscript(result.transcriptEn);
       }
       setAiFeedback(result);
@@ -555,7 +623,8 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
         'speaking',
         Math.min(100, Math.round((result.overallBand / 7.0) * 100)),
         currentLesson.xpReward,
-        12
+        12,
+        { updateBand: false }
       );
       addPracticeSubmission({
         skill: 'speaking',
@@ -565,6 +634,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
         bandEstimate: result.overallBand,
         aiFeedback: result,
       });
+      removeSpeakingDraft(currentLesson.id);
     } catch (err) {
       if (reqId !== aiRequestIdRef.current) return;
       const msg = err instanceof Error ? err.message : 'Lỗi kết nối Gemini AI.';
@@ -732,7 +802,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
                     ? 'Thời gian trả lời'
                     : `Chuẩn bị ${lesson.prepSeconds}s • Nói ${lesson.speakSeconds}s`}
                 </p>
-                <p className="font-fantasy text-2xl text-[#E2C88D] mt-1 flex items-center gap-2">
+                <p className="font-fantasy text-2xl text-[#E2C88D] mt-1 flex items-center gap-2 tabular-nums">
                   <Clock className="w-5 h-5 text-[#C5A059]" />
                   {String(Math.floor(secondsLeft / 60)).padStart(2, '0')}:
                   {String(secondsLeft % 60).padStart(2, '0')}
@@ -777,23 +847,34 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
               <div className="p-3.5 bg-[#0B0A08] border border-[#4E8A6E]/40 space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs font-semibold text-[#7BC2A0]">Bản ghi âm của bạn:</p>
-                  {audioBlob && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {audioBlob && (
+                      <button
+                        type="button"
+                        onClick={handleTranscribeAudio}
+                        disabled={isRecording || transcribing || aiLoading}
+                        className="btn-ghost-brass px-3 py-1 text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                      >
+                        {transcribing ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang chép lời...
+                          </>
+                        ) : (
+                          <>
+                            <FileAudio className="w-3.5 h-3.5" /> Chép lời từ bản thu (AI)
+                          </>
+                        )}
+                      </button>
+                    )}
                     <button
-                      onClick={handleTranscribeAudio}
-                      disabled={transcribing || aiLoading}
-                      className="btn-ghost-brass px-3 py-1 text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                      type="button"
+                      onClick={clearAudioUrl}
+                      disabled={isRecording || transcribing || aiLoading}
+                      className="px-2.5 py-1 bg-[#090807] border border-[#8E2933]/45 hover:border-[#B83B47] text-[11px] text-[#F2B5BC] flex items-center gap-1 cursor-pointer disabled:opacity-60"
                     >
-                      {transcribing ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang chép lời...
-                        </>
-                      ) : (
-                        <>
-                          <FileAudio className="w-3.5 h-3.5" /> Chép lời từ bản thu (AI)
-                        </>
-                      )}
+                      <Trash2 className="w-3 h-3" /> Xóa bản thu
                     </button>
-                  )}
+                  </div>
                 </div>
                 <audio controls src={audioUrl} className="w-full h-10" />
               </div>
@@ -811,6 +892,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
                       setTranscript('');
                       setInterimTranscript('');
                       interimTranscriptRef.current = '';
+                      removeSpeakingDraft(lesson.id);
                     }}
                     className="text-[11px] text-[#968D80] hover:text-[#E2C88D] flex items-center gap-1 cursor-pointer"
                   >
@@ -872,7 +954,7 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
             <div className="flex flex-wrap gap-3">
               <button
                 onClick={handleEvaluateAI}
-                disabled={aiLoading || transcribing}
+                disabled={isRecording || aiLoading || transcribing}
                 className="flex-1 min-w-[190px] btn-crimson py-3 px-4 text-xs uppercase tracking-[0.14em] flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
               >
                 {aiLoading ? (
@@ -888,7 +970,8 @@ export function SpeakingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void
 
               <button
                 onClick={handleCompletePractice}
-                className="btn-brass py-3 px-5 text-xs uppercase tracking-[0.14em] cursor-pointer"
+                disabled={isRecording}
+                className="btn-brass py-3 px-5 text-xs uppercase tracking-[0.14em] cursor-pointer disabled:opacity-60"
               >
                 Hoàn Thành (+{lesson.xpReward} XP)
               </button>

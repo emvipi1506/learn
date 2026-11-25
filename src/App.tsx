@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { AppProvider } from './store/AppContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
@@ -68,21 +68,25 @@ function AppShell() {
       window.history.replaceState(null, '', `#${activeTab}`);
     }
 
-    const onHashChange = () => {
+    const onRouteChange = () => {
       const next = parseTabFromHash();
       setActiveTab(next);
       window.scrollTo({ top: 0, behavior: 'auto' });
     };
 
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    window.addEventListener('hashchange', onRouteChange);
+    window.addEventListener('popstate', onRouteChange);
+    return () => {
+      window.removeEventListener('hashchange', onRouteChange);
+      window.removeEventListener('popstate', onRouteChange);
+    };
   }, []);
 
   const handleNavigate = (tab: NavTab) => {
     if (tab !== activeTab) {
       setActiveTab(tab);
       if (window.location.hash !== `#${tab}`) {
-        window.location.hash = `#${tab}`;
+        window.history.pushState(null, '', `#${tab}`);
       }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });

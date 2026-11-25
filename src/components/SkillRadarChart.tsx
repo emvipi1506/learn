@@ -1,4 +1,3 @@
-import React from 'react';
 import type { SkillBands } from '../types';
 
 interface SkillRadarChartProps {

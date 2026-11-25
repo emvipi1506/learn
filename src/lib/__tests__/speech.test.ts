@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getSpeakableText, splitTextForTTS } from '../speech';
+import { cleanKoreanExampleForTTS, getSpeakableText, splitTextForTTS } from '../speech';
 import { computeDictationDiff } from '../../pages/ListeningPage';
 import { KOREAN_VOCAB_BANK } from '../../data/koreanVocab';
 
@@ -21,6 +21,28 @@ describe('Xử lý giọng đọc TTS & Ngữ pháp tiếng Hàn (speech.ts)', (
       const speakable = getSpeakableText(card);
       expect(speakable).toMatch(/[가-힣]/);
       expect(speakable).not.toMatch(/\b(N1|N2|V\/A)\b/);
+    }
+  });
+
+  it('cleanKoreanExampleForTTS lọc sạch 가:/나:, dấu =, / và chú thích ngoặc tiếng Việt', () => {
+    expect(cleanKoreanExampleForTTS('가: 안녕히 가세요. / 나: 또 봐요.')).toBe(
+      '안녕히 가세요. 또 봐요.'
+    );
+    expect(cleanKoreanExampleForTTS('저는 운동을 해요. = 저는 운동해요.')).toBe(
+      '저는 운동을 해요. 저는 운동해요.'
+    );
+    expect(cleanKoreanExampleForTTS('집에서 회사까지 한 시간(이) 걸려요.')).toBe(
+      '집에서 회사까지 한 시간이 걸려요.'
+    );
+  });
+
+  it('tất cả thẻ biểu đạt trong KOREAN_VOCAB_BANK đều tạo chuỗi Hangul sạch cho TTS (không còn placeholder hay /)', () => {
+    const exprCards = KOREAN_VOCAB_BANK.filter((c) => c.pos === 'biểu đạt');
+    expect(exprCards).toHaveLength(35);
+    for (const card of exprCards) {
+      const speakable = getSpeakableText(card);
+      expect(speakable).toMatch(/[가-힣]/);
+      expect(speakable).not.toMatch(/\((명사|운동|연습|물건|값|숙소|비행기 표|시간|장소|위치)\)|가:|나:|[/=]/);
     }
   });
 

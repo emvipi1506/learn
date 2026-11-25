@@ -253,7 +253,7 @@ export const READING_LESSONS: ReadingLesson[] = [
       approach: { ipa: '/əˈprəʊtʃ/', meaningVi: 'phương pháp tiếp cận', vocabId: 'v_approach' },
       commute: { ipa: '/kəˈmjuːt/', meaningVi: 'quãng đường đi làm/học hàng ngày', vocabId: 'v_commute' },
       habit: { ipa: '/ˈhæb.ɪt/', meaningVi: 'thói quen', vocabId: 'v_habit' },
-      foundation: { ipa: '/faʊnˈdeɪ.ʃən/', meaningVi: 'nền tảng vững chắc' },
+      foundation: { ipa: '/faʊnˈdeɪ.ʃən/', meaningVi: 'nền tảng vững chắc', vocabId: 'v_foundation' },
     },
     questions: [
       {
@@ -299,7 +299,7 @@ export const READING_LESSONS: ReadingLesson[] = [
       budget: { ipa: '/ˈbʌdʒ.ɪt/', meaningVi: 'ngân sách', vocabId: 'v_budget' },
       essential: { ipa: '/ɪˈsen.ʃəl/', meaningVi: 'thiết yếu', vocabId: 'v_essential' },
       distractions: { ipa: '/dɪˈstræk.ʃənz/', meaningVi: 'những thứ gây xao nhãng', vocabId: 'v_distraction' },
-      skimming: { ipa: '/ˈskɪm.ɪŋ/', meaningVi: 'đọc lướt lấy ý chính' },
+      skimming: { ipa: '/ˈskɪm.ɪŋ/', meaningVi: 'đọc lướt lấy ý chính', vocabId: 'v_skimming' },
     },
     questions: [
       {
@@ -354,7 +354,7 @@ export const READING_LESSONS: ReadingLesson[] = [
       mitigate: { ipa: '/ˈmɪt.ɪ.ɡeɪt/', meaningVi: 'giảm thiểu tác hại', vocabId: 'v_mitigate' },
       prioritized: { ipa: '/praɪˈɒr.ə.taɪzd/', meaningVi: 'được ưu tiên', vocabId: 'v_prioritize' },
       significantly: { ipa: '/sɪɡˈnɪf.ɪ.kənt.li/', meaningVi: 'một cách đáng kể', vocabId: 'v_significant' },
-      ornamental: { ipa: '/ˌɔː.nəˈmen.təl/', meaningVi: 'dùng để trang trí' },
+      ornamental: { ipa: '/ˌɔː.nəˈmen.təl/', meaningVi: 'dùng để trang trí', vocabId: 'v_ornamental' },
     },
     questions: [
       {
@@ -399,8 +399,8 @@ export const READING_LESSONS: ReadingLesson[] = [
       paradox: { ipa: '/ˈpær.ə.dɒks/', meaningVi: 'nghịch lý', vocabId: 'v_paradox' },
       ubiquitous: { ipa: '/juːˈbɪk.wɪ.təs/', meaningVi: 'phổ biến khắp nơi', vocabId: 'v_ubiquitous' },
       phenomenon: { ipa: '/fəˈnɒm.ɪ.nən/', meaningVi: 'hiện tượng', vocabId: 'v_phenomenon' },
-      constraints: { ipa: '/kənˈstreɪnts/', meaningVi: 'giới hạn, khuôn khổ tự đặt ra' },
-      paralysis: { ipa: '/pəˈræl.ə.sɪs/', meaningVi: 'sự tê liệt (không ra được quyết định)' },
+      constraints: { ipa: '/kənˈstreɪnts/', meaningVi: 'giới hạn, khuôn khổ tự đặt ra', vocabId: 'v_constraints' },
+      paralysis: { ipa: '/pəˈræl.ə.sɪs/', meaningVi: 'sự tê liệt (không ra được quyết định)', vocabId: 'v_paralysis' },
     },
     questions: [
       {
@@ -490,7 +490,7 @@ export const WRITING_LESSONS: WritingLesson[] = [
       { en: 'As a consequence, ...', vi: 'Kết quả là, ...' },
     ],
     sampleAnswer:
-      'One major advantage of using smartphones for education is that learning materials become accessible anytime and anywhere. This is primarily because mobile apps allow learners to carry dictionaries, audio lessons, and flashcards in their pockets rather than relying on heavy textbooks. For instance, busy office workers can review twenty English words on the bus or listen to an IELTS podcast during their lunch break. As a result, smartphones help learners turn short fragments of free time into consistent daily progress, making ambitious goals such as Band 6.5 far more achievable.',
+      'One major advantage of using smartphones for education is that learning materials become accessible anytime and anywhere. This is primarily because modern mobile applications allow learners to carry bilingual dictionaries, interactive audio lessons, and spaced-repetition flashcards in their pockets rather than relying exclusively on heavy printed textbooks. For instance, busy office workers or university students can conveniently review twenty new English words on the morning bus or listen to a short IELTS podcast during their lunch break. As a result, smartphones empower dedicated learners to turn short fragments of free time into consistent daily progress, making ambitious academic goals such as achieving Band 6.5 far more realistic and achievable.',
     sampleHighlightsVi: [
       'Đủ 4 bước PEEL cực kỳ rõ ràng, giám khảo đọc một lần là thấy mạch lạc (CC cao).',
       'Paraphrase khéo: learning materials, fragments of free time, ambitious goals.',
@@ -561,9 +561,9 @@ export const WRITING_LESSONS: WritingLesson[] = [
       { en: 'In conclusion, despite minor communication hurdles,...', vi: 'Tóm lại, bất chấp những rào cản giao tiếp nhỏ,...' },
     ],
     sampleAnswer:
-      'In recent years, working remotely from home has shifted from a temporary measure to a widespread employment model across numerous industries. Although this arrangement introduces certain challenges regarding teamwork and mental well-being, I strongly believe that its advantages outweigh its disadvantages.\n\nOn the one hand, remote work can create genuine difficulties for both employees and organizations. Without regular face-to-face interaction, some staff members experience social isolation, which may weaken team spirit and slow down spontaneous problem-solving. Furthermore, when a home also serves as an office, workers can struggle to switch off after business hours, potentially exacerbating stress and burnout.\n\nOn the other hand, the benefits of telecommuting are substantial and long-lasting. First and foremost, eliminating the daily commute saves employees hours of exhausting travel each week while reducing fuel costs and urban traffic congestion. This extra time can be reinvested in family life, physical exercise, or personal development, resulting in higher job satisfaction. From an employer’s perspective, offering flexible remote arrangements also reduces office overhead expenses and widens the talent pool beyond local geographic boundaries.\n\nIn conclusion, while remote work requires clear communication habits to prevent isolation, its positive impacts on productivity, personal well-being, and environmental sustainability clearly outweigh the drawbacks.',
+      'In recent years, working remotely from home has shifted from a temporary emergency measure to a widespread employment model across numerous global industries. Although this arrangement introduces certain challenges regarding teamwork and mental well-being, I strongly believe that its long-term advantages significantly outweigh its disadvantages.\n\nOn the one hand, remote work can create genuine difficulties for both employees and organizations if it is poorly managed. Without regular face-to-face interaction, some staff members experience social isolation, which may gradually weaken team spirit, reduce informal mentorship for junior colleagues, and slow down spontaneous problem-solving during urgent projects. Furthermore, when a home also serves as an office, workers often struggle to switch off after business hours, potentially blurring personal boundaries and exacerbating chronic stress and burnout over time.\n\nOn the other hand, the benefits of telecommuting are substantial, measurable, and long-lasting. First and foremost, eliminating the daily commute saves employees several hours of exhausting travel each week while reducing fuel expenses and easing urban traffic congestion in crowded cities. This reclaimed time can be reinvested in family life, regular physical exercise, or self-directed skill development, resulting in markedly higher job satisfaction and sustained productivity. From an employer’s perspective, offering flexible remote arrangements also substantially lowers office overhead costs and enables companies to widen their talent pool beyond local geographic boundaries.\n\nIn conclusion, while remote work clearly requires deliberate communication habits and strict working hours to prevent isolation and overwork, its positive impacts on individual productivity, personal well-being, and environmental sustainability convincingly outweigh the drawbacks for modern workplaces.',
     sampleHighlightsVi: [
-      'Cấu trúc 4 đoạn chuẩn IELTS Task 2 (khoảng 225–260 từ gọn gàng, ý chặt).',
+      'Cấu trúc 4 đoạn chuẩn IELTS Task 2 (trên 250 từ đúng quy định phòng thi, ý chặt).',
       'Lập trường rõ xuyên suốt từ Mở bài đến Kết bài ("advantages outweigh disadvantages").',
       'Collocations tự nhiên Band 7.0: face-to-face interaction, social isolation, urban traffic congestion, widen the talent pool.',
     ],
@@ -626,8 +626,8 @@ export const SPEAKING_LESSONS: SpeakingLesson[] = [
       'Thật lòng thì tôi thích buổi tối muộn nhất vì nhà cuối cùng cũng yên tĩnh và không ai làm phiền. Trước đây giữ tập trung khá khó với tôi vì thông báo mạng xã hội cứ kéo sự chú ý đi. Dạo này tôi để điện thoại im lặng và nghe nhạc không lời nhẹ, điều đó thực sự giúp tôi duy trì sự tập trung.',
     keyVocab: [
       { word: 'interrupt', ipa: '/ˌɪn.təˈrʌpt/', meaningVi: 'ngắt lời, làm gián đoạn' },
-      { word: 'instrumental music', ipa: '/ˌɪn.strəˈmen.təl/', meaningVi: 'nhạc không lời' },
-      { word: 'maintain concentration', ipa: '/meɪnˈteɪn/', meaningVi: 'duy trì sự tập trung' },
+      { word: 'instrumental music', ipa: '/ˌɪn.strəˈmen.təl ˈmjuː.zɪk/', meaningVi: 'nhạc không lời' },
+      { word: 'maintain concentration', ipa: '/meɪnˈteɪn ˌkɒn.sənˈtreɪ.ʃən/', meaningVi: 'duy trì sự tập trung' },
     ],
     tipsVi: [
       'Dùng các cụm mở câu tự nhiên như "Honestly,", "To be honest,", "Nowadays," để có thêm 1 giây suy nghĩ.',
@@ -656,9 +656,9 @@ export const SPEAKING_LESSONS: SpeakingLesson[] = [
     sampleAnswerVi:
       'Một kỹ năng tôi quyết tâm làm chủ năm nay là nói và viết tiếng Anh trôi chảy ở mức IELTS 6.5. Thật lòng thì tiếng Anh chưa từng là môn thế mạnh của tôi ở trường, nên tôi từng khá lo lắng mỗi khi thấy bài đọc dài. Tuy nhiên, tôi nhận ra tiếng Anh tốt mở ra cánh cửa tới tri thức toàn cầu và việc làm quốc tế. Để rèn từng bước, tôi lập lịch học mỗi ngày: 20 phút flashcard lặp lại ngắt quãng trên điện thoại, sau đó luyện nghe và đọc mỗi tối. Tôi cũng tự ghi âm giọng để sửa phát âm. Dù hành trình mất khoảng một năm kiên trì, làm chủ tiếng Anh sẽ mang lại cho tôi sự tự tin và tự chủ rất lớn trong sự nghiệp tương lai.',
     keyVocab: [
-      { word: 'determined to', ipa: '/dɪˈtɜː.mɪnd/', meaningVi: 'quyết tâm làm gì' },
-      { word: 'structured routine', ipa: '/ˈstrʌk.tʃəd/', meaningVi: 'lịch trình có cấu trúc rõ ràng' },
-      { word: 'tremendous confidence', ipa: '/trɪˈmen.dəs/', meaningVi: 'sự tự tin to lớn' },
+      { word: 'determined to', ipa: '/dɪˈtɜː.mɪnd tuː/', meaningVi: 'quyết tâm làm gì' },
+      { word: 'structured routine', ipa: '/ˈstrʌk.tʃəd ruːˈtiːn/', meaningVi: 'lịch trình có cấu trúc rõ ràng' },
+      { word: 'tremendous confidence', ipa: '/trɪˈmen.dəs ˈkɒn.fɪ.dəns/', meaningVi: 'sự tự tin to lớn' },
     ],
     tipsVi: [
       'Trong 60 giây chuẩn bị, chỉ gạch đầu dòng TỪ KHÓA (không viết cả câu).',
@@ -685,8 +685,8 @@ export const SPEAKING_LESSONS: SpeakingLesson[] = [
       'Tôi không tin AI sẽ thay thế hoàn toàn giáo viên con người, dù nó chắc chắn là chất xúc tác mạnh mẽ cho việc tự học. Một mặt, gia sư AI luôn sẵn sàng 24/7 và phản hồi tức thì về ngữ pháp, viết luận, giúp thu hẹp khoảng cách giáo dục. Mặt khác, giáo viên thật mang lại sự động viên cảm xúc, sắc thái văn hóa và sự đồng hành mà phần mềm khó sao chép. Vì vậy mô hình hiệu quả nhất trong tương lai có lẽ là kết hợp cả hai.',
     keyVocab: [
       { word: 'undeniably', ipa: '/ˌʌn.dɪˈnaɪ.ə.bli/', meaningVi: 'không thể phủ nhận' },
-      { word: 'catalyst', ipa: '/ˈkæt.əl.ɪst/', meaningVi: 'chất xúc tác', },
-      { word: 'hybrid approach', ipa: '/ˈhaɪ.brɪd/', meaningVi: 'mô hình kết hợp' },
+      { word: 'catalyst', ipa: '/ˈkæt.əl.ɪst/', meaningVi: 'chất xúc tác' },
+      { word: 'hybrid approach', ipa: '/ˈhaɪ.brɪd əˈprəʊtʃ/', meaningVi: 'mô hình kết hợp' },
     ],
     tipsVi: [
       'Part 3 hỏi ở góc nhìn xã hội, tránh chỉ kể chuyện cá nhân — hãy dùng "In general", "On the one hand... on the other hand...".',

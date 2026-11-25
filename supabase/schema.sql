@@ -17,16 +17,28 @@ create table if not exists public.profiles (
   current_act integer not null default 1,
   placement_completed boolean not null default false,
   skill_bands jsonb not null default '{"listening": 3.0, "reading": 3.0, "writing": 2.5, "speaking": 2.5}'::jsonb,
-  saved_vocab_ids jsonb not null default '[]'::jsonb,
-  starter_seeded boolean not null default true,
+  saved_vocab_ids jsonb default null,
+  starter_seeded boolean not null default false,
+  deleted_custom_vocab_ids jsonb not null default '[]'::jsonb,
+  settings_updated_at timestamptz,
   updated_at timestamptz not null default now()
 );
 
 -- Tương thích ngược cho tài khoản đã tạo từ phiên bản lược đồ trước
 alter table public.profiles
-  add column if not exists saved_vocab_ids jsonb not null default '[]'::jsonb;
+  add column if not exists saved_vocab_ids jsonb default null;
 alter table public.profiles
-  add column if not exists starter_seeded boolean not null default true;
+  alter column saved_vocab_ids drop not null;
+alter table public.profiles
+  alter column saved_vocab_ids set default null;
+alter table public.profiles
+  add column if not exists starter_seeded boolean not null default false;
+alter table public.profiles
+  alter column starter_seeded set default false;
+alter table public.profiles
+  add column if not exists deleted_custom_vocab_ids jsonb not null default '[]'::jsonb;
+alter table public.profiles
+  add column if not exists settings_updated_at timestamptz;
 
 -- 2. Bảng tiến độ bài học theo 4 kỹ năng
 create table if not exists public.lesson_progress (
@@ -146,8 +158,14 @@ language plpgsql
 security definer set search_path = ''
 as $$
 begin
-  insert into public.profiles (id, display_name)
-  values (new.id, coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1)))
+  insert into public.profiles (id, display_name, saved_vocab_ids, starter_seeded, settings_updated_at)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1)),
+    null,
+    false,
+    null
+  )
   on conflict (id) do nothing;
   return new;
 end;

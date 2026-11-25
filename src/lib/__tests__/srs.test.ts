@@ -65,4 +65,18 @@ describe('Thuật toán SRS SM-2 (srs.ts)', () => {
     expect(formatIntervalLabel(fresh, 2)).toBe('1 ngày');
     expect(formatIntervalLabel(fresh, 3)).toBe('4 ngày');
   });
+
+  it('isCardDue trả true khi nextReviewAt lỗi NaN và tự đến hạn lại theo nowMs sau 10 phút', () => {
+    const corrupted = {
+      ...createInitialSRS('w_bad_date'),
+      nextReviewAt: 'not-a-valid-date',
+    };
+    expect(isCardDue(corrupted)).toBe(true);
+
+    const base = createInitialSRS('w_again_tick');
+    const updated = calculateNextSRS(base, 0);
+    const dueMs = Date.parse(updated.nextReviewAt);
+    expect(isCardDue(updated, dueMs - 60_000)).toBe(false);
+    expect(isCardDue(updated, dueMs + 1_000)).toBe(true);
+  });
 });

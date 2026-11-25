@@ -1,6 +1,7 @@
 import { DAILY_QUESTS, getXpForNextLevel, roundIeltsBand } from '../data/roadmap';
 import type {
   ActNumber,
+  AIFeedbackResult,
   DailyProgress,
   LessonProgressRecord,
   PracticeSubmission,
@@ -18,10 +19,14 @@ export interface PersistedState {
   savedVocabIds: string[];
   starterSeeded: boolean;
   customVocab: VocabItem[];
+  deletedCustomVocabIds: string[];
   submissions: PracticeSubmission[];
   daily: DailyProgress;
+  settingsUpdatedAt?: string;
   updatedAt?: string;
 }
+
+export type CloudSnapshot = Partial<PersistedState>;
 
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -136,13 +141,58 @@ function clampBand(val: unknown, fallback: number): number {
   return roundIeltsBand(num);
 }
 
+export function sanitizeAiFeedback(raw: unknown): AIFeedbackResult | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.overallBand !== 'number' || !Number.isFinite(obj.overallBand)) return undefined;
+  if (!Array.isArray(obj.criteria) || obj.criteria.length === 0) return undefined;
+
+  const criteria = obj.criteria
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const c = item as Record<string, unknown>;
+      if (typeof c.name !== 'string' || !c.name.trim()) return null;
+      if (typeof c.score !== 'number' || !Number.isFinite(c.score)) return null;
+      return {
+        name: c.name.trim(),
+        score: clampBand(c.score, 5.0),
+        commentVi: typeof c.commentVi === 'string' && c.commentVi.trim() ? c.commentVi.trim() : 'Chưa có nhận xét chi tiết.',
+      };
+    })
+    .filter((c): c is { name: string; score: number; commentVi: string } => c !== null);
+
+  if (criteria.length === 0) return undefined;
+
+  const strengthsVi = Array.isArray(obj.strengthsVi)
+    ? obj.strengthsVi.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+    : [];
+  const improvementsVi = Array.isArray(obj.improvementsVi)
+    ? obj.improvementsVi.filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+    : [];
+
+  return {
+    overallBand: clampBand(obj.overallBand, 5.0),
+    criteria,
+    strengthsVi: strengthsVi.length > 0 ? strengthsVi : ['Bài làm đã bám sát chủ đề được giao.'],
+    improvementsVi: improvementsVi.length > 0 ? improvementsVi : ['Tiếp tục mở rộng từ vựng và cấu trúc câu.'],
+    upgradedVersionEn: typeof obj.upgradedVersionEn === 'string' ? obj.upgradedVersionEn : '',
+    encouragementVi:
+      typeof obj.encouragementVi === 'string' && obj.encouragementVi.trim()
+        ? obj.encouragementVi.trim()
+        : 'Tiếp tục rèn luyện đều đặn mỗi ngày.',
+    ...(typeof obj.transcriptEn === 'string' && obj.transcriptEn.trim()
+      ? { transcriptEn: obj.transcriptEn.trim() }
+      : {}),
+  };
+}
+
 /**
  * Gộp thông minh 2 chiều (Pull -> Merge -> Push) giữa dữ liệu cục bộ và dữ liệu Supabase.
  * Nguyên tắc: Không bao giờ ghi đè làm mất tiến độ cao hơn hoặc thẻ SRS ôn gần hơn.
  */
 export function mergePersistedStates(
   local: PersistedState,
-  cloud: Partial<PersistedState>,
+  cloud: CloudSnapshot,
   options?: {
     cloudHasProfile?: boolean;
     preferCloudSavedVocab?: boolean;
@@ -153,8 +203,17 @@ export function mergePersistedStates(
   const cloudProfile = cloud.profile;
   const localTs = toTimestamp(local.updatedAt);
   const cloudTs = toTimestamp(cloud.updatedAt);
-  const cloudNewer = cloudTs > localTs;
-  const localNewer = localTs > cloudTs;
+
+  const localSettingsTs = toTimestamp(local.settingsUpdatedAt) || localTs;
+  const cloudHasUserSettings =
+    Boolean(cloud.settingsUpdatedAt) ||
+    cloud.starterSeeded !== false ||
+    Array.isArray(cloud.savedVocabIds);
+  const cloudSettingsTs = toTimestamp(cloud.settingsUpdatedAt)
+    || (options?.cloudHasProfile !== false && cloudHasUserSettings ? cloudTs : 0);
+
+  const cloudSettingsNewer = cloudSettingsTs > localSettingsTs;
+  const localSettingsNewer = localSettingsTs > cloudSettingsTs;
 
   // 1. Hợp nhất hồ sơ học viên
   let mergedProfile: UserProfile = { ...local.profile };
@@ -180,13 +239,16 @@ export function mergePersistedStates(
       id: cloudProfile.id || local.profile.id,
       email: cloudProfile.email || local.profile.email,
       displayName:
-        cloudNewer || (isLocalDefaultName && !isCloudDefaultName)
+        cloudSettingsNewer ||
+        ((!localSettingsNewer || !local.settingsUpdatedAt) && isLocalDefaultName && !isCloudDefaultName)
           ? cloudProfile.displayName || local.profile.displayName
           : local.profile.displayName,
-      targetBand: cloudNewer ? cloudProfile.targetBand : local.profile.targetBand,
-      dailyMinutes: cloudNewer ? cloudProfile.dailyMinutes : local.profile.dailyMinutes,
-      currentAct: cloudNewer
+      targetBand: cloudSettingsNewer ? cloudProfile.targetBand : local.profile.targetBand,
+      dailyMinutes: cloudSettingsNewer ? cloudProfile.dailyMinutes : local.profile.dailyMinutes,
+      currentAct: cloudSettingsNewer
         ? cloudProfile.currentAct
+        : localSettingsNewer
+        ? local.profile.currentAct
         : (Math.max(local.profile.currentAct, cloudProfile.currentAct) as ActNumber),
       currentBand: Math.max(local.profile.currentBand, cloudProfile.currentBand),
       xp: useCloudLevelXp ? cloudProfile.xp : local.profile.xp,
@@ -197,6 +259,12 @@ export function mergePersistedStates(
       skillBands: mergedSkillBands,
     };
   }
+
+  // Hợp nhất danh sách tombstone các thẻ tự tạo đã xóa
+  const mergedDeletedCustomVocabIds = Array.from(
+    new Set([...(local.deletedCustomVocabIds || []), ...(cloud.deletedCustomVocabIds || [])])
+  ).slice(-200);
+  const deletedCustomSet = new Set(mergedDeletedCustomVocabIds);
 
   // 2. Hợp nhất tiến độ bài học (giữ điểm cao hơn; nếu bằng điểm thì giữ thời điểm mới hơn)
   const mergedLessons: Record<string, LessonProgressRecord> = { ...local.lessonProgress };
@@ -221,9 +289,15 @@ export function mergePersistedStates(
   }
 
   // 3. Hợp nhất thẻ SRS (giữ bản ghi có lastReviewedAt mới hơn, hoặc repetitions cao hơn nếu chưa có timestamp)
-  const mergedSRS: Record<string, VocabSRSState> = { ...local.vocabSRS };
+  const mergedSRS: Record<string, VocabSRSState> = {};
+  for (const [wordId, localCard] of Object.entries(local.vocabSRS)) {
+    if (!deletedCustomSet.has(wordId)) {
+      mergedSRS[wordId] = localCard;
+    }
+  }
   if (cloud.vocabSRS) {
     for (const [wordId, cloudCard] of Object.entries(cloud.vocabSRS)) {
+      if (deletedCustomSet.has(wordId)) continue;
       const localCard = mergedSRS[wordId];
       if (!localCard) {
         mergedSRS[wordId] = cloudCard;
@@ -240,52 +314,61 @@ export function mergePersistedStates(
     }
   }
 
-  // 4. Hợp nhất customVocab theo id (giữ đầy đủ cả 2 máy)
+  // 4. Hợp nhất customVocab theo id (giữ đầy đủ cả 2 máy, trừ thẻ đã xóa trong tombstone)
   const customMap = new Map<string, VocabItem>();
   for (const item of cloud.customVocab || []) {
-    customMap.set(item.id, { ...item, isCustom: true });
+    if (!deletedCustomSet.has(item.id)) {
+      customMap.set(item.id, { ...item, isCustom: true });
+    }
   }
   for (const item of local.customVocab || []) {
-    customMap.set(item.id, { ...item, isCustom: true });
+    if (!deletedCustomSet.has(item.id)) {
+      customMap.set(item.id, { ...item, isCustom: true });
+    }
   }
   const mergedCustomVocab = Array.from(customMap.values());
 
-  // 5. Hợp nhất savedVocabIds (tôn trọng thao tác bỏ chọn thẻ của người dùng, không tự hồi sinh từ vocabSRS)
+  // 5. Hợp nhất savedVocabIds: ưu tiên bên có settingsUpdatedAt mới hơn (kèm giữ thẻ tự tạo mới chưa đồng bộ)
   const hasCloudSaved = Array.isArray(cloud.savedVocabIds);
   const localCustomIds = new Set((local.customVocab || []).map((c) => c.id));
   const cloudCustomIds = new Set((cloud.customVocab || []).map((c) => c.id));
   let mergedSavedVocabIds: string[];
   if (hasCloudSaved) {
-    if (options?.preferCloudSavedVocab && cloudNewer) {
+    if (cloudSettingsNewer || (cloudSettingsTs === localSettingsTs && options?.preferCloudSavedVocab)) {
       const nextSet = new Set<string>(cloud.savedVocabIds);
       for (const id of local.savedVocabIds) {
-        if (localCustomIds.has(id) && !cloudCustomIds.has(id)) {
+        if (localCustomIds.has(id) && !cloudCustomIds.has(id) && !deletedCustomSet.has(id)) {
           nextSet.add(id);
         }
       }
-      mergedSavedVocabIds = Array.from(nextSet);
-    } else if (!options?.preferCloudSavedVocab && localNewer) {
+      mergedSavedVocabIds = Array.from(nextSet).filter((id) => !deletedCustomSet.has(id));
+    } else if (
+      localSettingsNewer ||
+      (cloudSettingsTs === localSettingsTs && options?.preferCloudSavedVocab === false)
+    ) {
       const nextSet = new Set<string>(local.savedVocabIds);
       for (const id of cloud.savedVocabIds!) {
-        if (cloudCustomIds.has(id) && !localCustomIds.has(id)) {
+        if (cloudCustomIds.has(id) && !localCustomIds.has(id) && !deletedCustomSet.has(id)) {
           nextSet.add(id);
         }
       }
-      mergedSavedVocabIds = Array.from(nextSet);
+      mergedSavedVocabIds = Array.from(nextSet).filter((id) => !deletedCustomSet.has(id));
     } else {
       const savedSet = new Set<string>(local.savedVocabIds);
       for (const id of cloud.savedVocabIds!) {
         savedSet.add(id);
       }
-      mergedSavedVocabIds = Array.from(savedSet);
+      mergedSavedVocabIds = Array.from(savedSet).filter((id) => !deletedCustomSet.has(id));
     }
   } else {
-    // Tài khoản cũ trước khi nâng cấp cột saved_vocab_ids: giữ danh sách cục bộ và thẻ SRS từ đám mây
+    // Tài khoản mới hoặc tài khoản cũ trước khi nâng cấp cột saved_vocab_ids: giữ danh sách cục bộ và thẻ SRS từ đám mây
     const savedSet = new Set<string>(local.savedVocabIds);
     for (const wordId of Object.keys(cloud.vocabSRS || {})) {
-      savedSet.add(wordId);
+      if (!deletedCustomSet.has(wordId)) {
+        savedSet.add(wordId);
+      }
     }
-    mergedSavedVocabIds = Array.from(savedSet);
+    mergedSavedVocabIds = Array.from(savedSet).filter((id) => !deletedCustomSet.has(id));
   }
 
   // 6. Hợp nhất submissions theo id & khử trùng bản ghi cũ (sub_...) trùng nội dung trong vòng 2 phút
@@ -333,6 +416,11 @@ export function mergePersistedStates(
       ? cloud.updatedAt
       : local.updatedAt || new Date().toISOString();
 
+  const maxSettingsUpdated =
+    cloudSettingsTs > localSettingsTs
+      ? cloud.settingsUpdatedAt || cloud.updatedAt
+      : local.settingsUpdatedAt || (localSettingsTs > 0 ? local.updatedAt : undefined);
+
   return {
     profile: mergedProfile,
     lessonProgress: mergedLessons,
@@ -340,8 +428,10 @@ export function mergePersistedStates(
     savedVocabIds: mergedSavedVocabIds,
     starterSeeded: Boolean(local.starterSeeded || cloud.starterSeeded),
     customVocab: mergedCustomVocab,
+    deletedCustomVocabIds: mergedDeletedCustomVocabIds,
     submissions: mergedSubmissions,
     daily: mergedDaily,
+    ...(maxSettingsUpdated ? { settingsUpdatedAt: maxSettingsUpdated } : {}),
     updatedAt: maxUpdated,
   };
 }
@@ -499,7 +589,16 @@ export function sanitizeImportedState(
     }
   }
 
-  // Validate submissions
+  // Validate deletedCustomVocabIds
+  const deletedCustomVocabIds = Array.isArray(parsed.deletedCustomVocabIds)
+    ? Array.from(
+        new Set(
+          parsed.deletedCustomVocabIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        )
+      ).slice(-200)
+    : [];
+
+  // Validate submissions (chuẩn hóa ID cũ sub_... sang UUID v4 hợp lệ & validate chặt aiFeedback)
   const submissions: PracticeSubmission[] = [];
   if (Array.isArray(parsed.submissions)) {
     for (const item of parsed.submissions) {
@@ -508,16 +607,16 @@ export function sanitizeImportedState(
       if (s.skill !== 'writing' && s.skill !== 'speaking') continue;
       if (typeof s.promptId !== 'string' || typeof s.content !== 'string') continue;
       submissions.push({
-        id: typeof s.id === 'string' && s.id.trim() ? s.id : generateSubmissionId(),
+        id: typeof s.id === 'string' && isValidUuid(s.id) ? s.id : generateSubmissionId(),
         skill: s.skill,
         promptId: s.promptId,
         promptTitle: typeof s.promptTitle === 'string' ? s.promptTitle : s.promptId,
         content: s.content,
-        bandEstimate: clampBand(s.bandEstimate, 5.0),
-        aiFeedback:
-          s.aiFeedback && typeof s.aiFeedback === 'object'
-            ? (s.aiFeedback as PracticeSubmission['aiFeedback'])
-            : undefined,
+        bandEstimate:
+          typeof s.bandEstimate === 'number' && Number.isFinite(s.bandEstimate) && s.bandEstimate <= 0
+            ? 0
+            : clampBand(s.bandEstimate, 0),
+        aiFeedback: sanitizeAiFeedback(s.aiFeedback),
         createdAt: typeof s.createdAt === 'string' ? s.createdAt : new Date().toISOString(),
       });
     }
@@ -549,6 +648,7 @@ export function sanitizeImportedState(
     }
   }
 
+  const nowIso = new Date().toISOString();
   return {
     ok: true,
     state: {
@@ -558,9 +658,11 @@ export function sanitizeImportedState(
       savedVocabIds,
       starterSeeded: parsed.starterSeeded !== undefined ? Boolean(parsed.starterSeeded) : true,
       customVocab,
+      deletedCustomVocabIds,
       submissions: submissions.slice(0, 30),
       daily,
-      updatedAt: new Date().toISOString(),
+      settingsUpdatedAt: nowIso,
+      updatedAt: nowIso,
     },
   };
 }

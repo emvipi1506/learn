@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Check,
   Cloud,
   CloudOff,
@@ -55,18 +56,24 @@ export function SettingsPage() {
 
   const [keyInput, setKeyInput] = useState(geminiApiKey);
   const [showKey, setShowKey] = useState(false);
-  const [keySaved, setKeySaved] = useState(false);
+  const [keyNotice, setKeyNotice] = useState<string | null>(null);
 
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [signupName, setSignupName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authMsg, setAuthMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  const [signOutBusy, setSignOutBusy] = useState(false);
 
   const [backupMsg, setBackupMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [pwaState, setPwaState] = useState(() => getPWAInstallState());
   const [installFeedback, setInstallFeedback] = useState<string | null>(null);
+
+  const profileTimerRef = useRef<number | null>(null);
+  const keyTimerRef = useRef<number | null>(null);
 
   // Đồng bộ lại biểu mẫu khi profile cập nhật từ Supabase hoặc khi khôi phục JSON
   useEffect(() => {
@@ -82,6 +89,17 @@ export function SettingsPage() {
   useEffect(() => {
     setPwaState(getPWAInstallState());
     return subscribePWAInstall(() => setPwaState(getPWAInstallState()));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (profileTimerRef.current !== null) {
+        window.clearTimeout(profileTimerRef.current);
+      }
+      if (keyTimerRef.current !== null) {
+        window.clearTimeout(keyTimerRef.current);
+      }
+    };
   }, []);
 
   const handleInstallWindows = async () => {
@@ -101,17 +119,32 @@ export function SettingsPage() {
     updateProfileSettings({
       displayName: displayName.trim() || 'Học Giả Mới',
       targetBand,
-      dailyMinutes,
+      dailyMinutes: Math.max(60, Math.min(240, dailyMinutes)),
     });
     setProfileSaved(true);
-    window.setTimeout(() => setProfileSaved(false), 2500);
+    if (profileTimerRef.current !== null) {
+      window.clearTimeout(profileTimerRef.current);
+    }
+    profileTimerRef.current = window.setTimeout(() => {
+      profileTimerRef.current = null;
+      setProfileSaved(false);
+    }, 2500);
   };
 
   const handleSaveKey = (e: React.FormEvent) => {
     e.preventDefault();
-    setGeminiApiKey(keyInput);
-    setKeySaved(true);
-    window.setTimeout(() => setKeySaved(false), 2500);
+    const trimmed = keyInput.trim();
+    setGeminiApiKey(trimmed);
+    setKeyNotice(
+      trimmed ? 'Đã lưu Gemini API Key.' : 'Đã xóa Gemini API Key khỏi thiết bị.'
+    );
+    if (keyTimerRef.current !== null) {
+      window.clearTimeout(keyTimerRef.current);
+    }
+    keyTimerRef.current = window.setTimeout(() => {
+      keyTimerRef.current = null;
+      setKeyNotice(null);
+    }, 2500);
   };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
@@ -120,10 +153,25 @@ export function SettingsPage() {
     setAuthMsg(null);
     const res =
       authMode === 'login'
-        ? await signInCloud(email, password)
-        : await signUpCloud(email, password, displayName);
+        ? await signInCloud(email.trim(), password)
+        : await signUpCloud(email.trim(), password, signupName.trim() || displayName.trim() || 'Học Giả Mới');
     setAuthMsg({ ok: res.ok, text: res.message });
+    if (res.ok) {
+      setPassword('');
+    }
     setAuthBusy(false);
+  };
+
+  const handleConfirmSignOut = async () => {
+    setSignOutBusy(true);
+    try {
+      await signOutCloud();
+      setPassword('');
+      setAuthMsg(null);
+      setConfirmSignOut(false);
+    } finally {
+      setSignOutBusy(false);
+    }
   };
 
   const handleDownloadBackup = () => {
@@ -197,14 +245,56 @@ export function SettingsPage() {
                 Đồng bộ ngay
               </button>
               <button
-                onClick={signOutCloud}
-                className="px-3.5 py-2 bg-[#0B0A08] border border-[#C5A059]/25 text-xs text-[#ECE6D8] flex items-center gap-1.5 cursor-pointer"
+                type="button"
+                onClick={() => setConfirmSignOut((v) => !v)}
+                className="px-3.5 py-2 bg-[#0B0A08] border border-[#C5A059]/25 hover:border-[#8E2933] text-xs text-[#ECE6D8] flex items-center gap-1.5 cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" /> Đăng xuất
               </button>
             </div>
           )}
         </div>
+
+        {cloudUserEmail && confirmSignOut && (
+          <div className="p-4 bg-[#8E2933]/12 border border-[#8E2933]/50 space-y-3">
+            <div className="flex items-start gap-2.5 text-xs text-[#F2C3C8] leading-relaxed">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-[#E28A93]" />
+              <div>
+                <p className="font-semibold text-[#F4EFE4]">
+                  Xác nhận đăng xuất khỏi tài khoản {cloudUserEmail}?
+                </p>
+                <p className="mt-1">
+                  Để bảo vệ dữ liệu riêng tư trên thiết bị, thao tác này sẽ đưa bộ nhớ máy về trạng thái Khách trắng. Bạn nên{' '}
+                  <strong className="text-[#E2C88D]">xuất file sao lưu (.JSON)</strong> trước nếu chưa bấm đồng bộ.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={handleDownloadBackup}
+                className="btn-ghost-brass px-3.5 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" /> Xuất sao lưu .JSON trước
+              </button>
+              <button
+                type="button"
+                disabled={signOutBusy}
+                onClick={handleConfirmSignOut}
+                className="btn-crimson px-4 py-2 text-xs uppercase tracking-wider cursor-pointer disabled:opacity-60"
+              >
+                {signOutBusy ? 'Đang đăng xuất...' : 'Xác nhận đăng xuất'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmSignOut(false)}
+                className="px-3.5 py-2 bg-[#0B0A08] border border-[#C5A059]/25 text-xs text-[#968D80] hover:text-[#ECE6D8] cursor-pointer"
+              >
+                Hủy
+              </button>
+            </div>
+          </div>
+        )}
 
         {!cloudConfigured ? (
           <div className="p-4 bg-[#0B0A08] border-l-2 border-[#C5A059] space-y-2 text-xs text-[#C8BFB0] leading-relaxed">
@@ -225,7 +315,10 @@ export function SettingsPage() {
             <div className="flex border border-[#C5A059]/25 bg-[#0B0A08] w-fit">
               <button
                 type="button"
-                onClick={() => setAuthMode('login')}
+                onClick={() => {
+                  setAuthMode('login');
+                  setAuthMsg(null);
+                }}
                 className={`px-4 py-1.5 text-xs uppercase tracking-wider cursor-pointer ${
                   authMode === 'login' ? 'bg-[#C5A059]/20 text-[#E2C88D] font-semibold' : 'text-[#968D80]'
                 }`}
@@ -234,7 +327,10 @@ export function SettingsPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setAuthMode('signup')}
+                onClick={() => {
+                  setAuthMode('signup');
+                  setAuthMsg(null);
+                }}
                 className={`px-4 py-1.5 text-xs uppercase tracking-wider cursor-pointer ${
                   authMode === 'signup' ? 'bg-[#C5A059]/20 text-[#E2C88D] font-semibold' : 'text-[#968D80]'
                 }`}
@@ -243,10 +339,22 @@ export function SettingsPage() {
               </button>
             </div>
 
+            {authMode === 'signup' && (
+              <input
+                type="text"
+                autoComplete="name"
+                value={signupName}
+                onChange={(e) => setSignupName(e.target.value)}
+                placeholder="Tên hiển thị (VD: Minh Anh)"
+                className="w-full bg-[#090807] border border-[#C5A059]/25 px-3.5 py-2.5 text-base sm:text-sm text-[#ECE6D8]"
+              />
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <input
                 type="email"
                 required
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="Email của bạn"
@@ -256,6 +364,7 @@ export function SettingsPage() {
                 type="password"
                 required
                 minLength={6}
+                autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Mật khẩu (tối thiểu 6 ký tự)"
@@ -317,9 +426,9 @@ export function SettingsPage() {
             </button>
           </div>
 
-          {keySaved && (
+          {keyNotice && (
             <p className="text-xs text-[#7BC2A0] flex items-center gap-1.5">
-              <Check className="w-4 h-4" /> Đã lưu Gemini API Key.
+              <Check className="w-4 h-4" /> {keyNotice}
             </p>
           )}
           <p className="text-xs text-[#968D80]">
@@ -375,6 +484,8 @@ export function SettingsPage() {
               <option value={120}>2.0 giờ / ngày (Khuyên dùng)</option>
               <option value={150}>2.5 giờ / ngày</option>
               <option value={180}>3.0 giờ / ngày</option>
+              <option value={210}>3.5 giờ / ngày</option>
+              <option value={240}>4.0 giờ / ngày</option>
             </select>
           </div>
 

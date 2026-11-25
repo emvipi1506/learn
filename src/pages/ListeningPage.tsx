@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -69,12 +69,13 @@ export function computeDictationDiff(target: string, input: string): { word: str
 export function ListeningPage() {
   const { lessonProgress, completeLesson } = useApp();
   const [selectedId, setSelectedId] = useState(LISTENING_LESSONS[0].id);
-  const [rate, setRate] = useState<number>(0.92);
+  const [rate, setRate] = useState<number>(1.0);
   const [accent, setAccent] = useState<'en-GB' | 'en-US'>('en-GB');
   const [isPlaying, setIsPlaying] = useState(false);
   const [activeLineIdx, setActiveLineIdx] = useState<number | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
   const [ttsWarning, setTtsWarning] = useState<string | null>(null);
+  const [submitWarning, setSubmitWarning] = useState<string | null>(null);
 
   const [dictationInput, setDictationInput] = useState('');
   const [dictationChecked, setDictationChecked] = useState(false);
@@ -85,6 +86,10 @@ export function ListeningPage() {
 
   const playbackSessionRef = useRef(0);
   const nextTimerRef = useRef<number | null>(null);
+  const accentRef = useRef(accent);
+  accentRef.current = accent;
+  const rateRef = useRef(rate);
+  rateRef.current = rate;
 
   const lesson = LISTENING_LESSONS.find((l) => l.id === selectedId) ?? LISTENING_LESSONS[0];
 
@@ -109,6 +114,7 @@ export function ListeningPage() {
     setDictationChecked(false);
     setShowTranscript(false);
     setTtsWarning(null);
+    setSubmitWarning(null);
     return () => {
       cancelPlayback();
     };
@@ -135,8 +141,8 @@ export function ListeningPage() {
       }
       setActiveLineIdx(idx);
       speakText(lesson.transcriptLines[idx].en, {
-        lang: accent,
-        rate,
+        lang: accentRef.current,
+        rate: rateRef.current,
         onEnd: () => {
           if (session !== playbackSessionRef.current) return;
           // Khoảng trễ ngắn ~60ms giúp iOS Safari không nuốt câu kế tiếp
@@ -154,10 +160,8 @@ export function ListeningPage() {
       });
     };
 
-    nextTimerRef.current = window.setTimeout(() => {
-      nextTimerRef.current = null;
-      playIndex(0);
-    }, 60);
+    // Gọi đồng bộ ngay trong click handler để giữ quyền user-gesture trên iOS Safari PWA
+    playIndex(0);
   };
 
   const playSingleLine = (text: string, idx?: number) => {
@@ -171,24 +175,21 @@ export function ListeningPage() {
     setIsPlaying(true);
     setActiveLineIdx(idx ?? null);
 
-    nextTimerRef.current = window.setTimeout(() => {
-      nextTimerRef.current = null;
-      if (session !== playbackSessionRef.current) return;
-      speakText(text, {
-        lang: accent,
-        rate,
-        onEnd: () => {
-          if (session !== playbackSessionRef.current) return;
-          setIsPlaying(false);
-          setActiveLineIdx(null);
-        },
-        onError: () => {
-          if (session !== playbackSessionRef.current) return;
-          setIsPlaying(false);
-          setActiveLineIdx(null);
-        },
-      });
-    }, 60);
+    speakText(text, {
+      lang: accentRef.current,
+      rate: rateRef.current,
+      onEnd: () => {
+        if (session !== playbackSessionRef.current) return;
+        setIsPlaying(false);
+        setActiveLineIdx(null);
+      },
+      onError: () => {
+        if (session !== playbackSessionRef.current) return;
+        setIsPlaying(false);
+        setActiveLineIdx(null);
+        setTtsWarning('Không thể phát âm thanh. Hãy kiểm tra loa thiết bị hoặc tắt chế độ im lặng trên iPhone.');
+      },
+    });
   };
 
   const handleStop = () => {
@@ -199,12 +200,22 @@ export function ListeningPage() {
     const userVal = normalizeAnswer(answers[qId] || '');
     const expVal = normalizeAnswer(expected);
     if (!userVal) return false;
-    if (expVal === '10' && (userVal === '10' || userVal === 'ten')) return true;
-    if (expVal === '8' && (userVal === '8' || userVal === 'eight')) return true;
+    if (expVal === '10') {
+      return /^(10|ten)(\s+(new\s+)?words?)?$/.test(userVal);
+    }
+    if (expVal === '8') {
+      return /^(8|eight)(\s+books?)?$/.test(userVal);
+    }
     return userVal === expVal;
   };
 
   const handleSubmit = () => {
+    const hasAnyAnswer = lesson.questions.some((q) => Boolean((answers[q.id] || '').trim()));
+    if (!hasAnyAnswer) {
+      setSubmitWarning('Hãy trả lời ít nhất 1 câu hỏi trước khi nộp bài nhé.');
+      return;
+    }
+    setSubmitWarning(null);
     let correct = 0;
     for (const q of lesson.questions) {
       if (isQuestionCorrect(q.id, q.answer)) correct += 1;
@@ -325,7 +336,7 @@ export function ListeningPage() {
             </div>
 
             <div className="flex border border-[#C5A059]/25 bg-[#12100E] text-xs">
-              {[0.75, 0.92, 1.1].map((spd) => (
+              {[0.75, 1.0, 1.15].map((spd) => (
                 <button
                   key={spd}
                   onClick={() => setRate(spd)}
@@ -333,7 +344,7 @@ export function ListeningPage() {
                     rate === spd ? 'bg-[#C5A059]/20 text-[#E2C88D] font-semibold' : 'text-[#968D80]'
                   }`}
                 >
-                  {spd === 0.92 ? '1.0x' : `${spd}x`}
+                  {spd === 1 ? '1.0x' : `${spd}x`}
                 </button>
               ))}
             </div>
@@ -464,7 +475,10 @@ export function ListeningPage() {
                         <button
                           key={opt}
                           disabled={submitted}
-                          onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: opt }))}
+                          onClick={() => {
+                            setSubmitWarning(null);
+                            setAnswers((prev) => ({ ...prev, [q.id]: opt }));
+                          }}
                           className={`px-3.5 py-2.5 text-left text-sm border transition cursor-pointer ${
                             isRightOpt
                               ? 'bg-[#4E8A6E]/20 border-[#4E8A6E] text-[#A8DFC4]'
@@ -485,7 +499,10 @@ export function ListeningPage() {
                     type="text"
                     disabled={submitted}
                     value={answers[q.id] || ''}
-                    onChange={(e) => setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                    onChange={(e) => {
+                      setSubmitWarning(null);
+                      setAnswers((prev) => ({ ...prev, [q.id]: e.target.value }));
+                    }}
                     placeholder="Nhập câu trả lời..."
                     className="w-full sm:max-w-sm bg-[#12100E] border border-[#C5A059]/25 focus:border-[#E2C88D] focus:outline-none px-3.5 py-2.5 text-base sm:text-sm text-[#ECE6D8]"
                   />
@@ -516,6 +533,13 @@ export function ListeningPage() {
             );
           })}
         </div>
+
+        {submitWarning && (
+          <div className="p-3 bg-[#8E2933]/15 border border-[#8E2933]/50 text-xs text-[#F2C3C8] flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-[#E28A93]" />
+            <span>{submitWarning}</span>
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-3">
           {!submitted ? (

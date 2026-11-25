@@ -1,27 +1,50 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CalendarClock, Check, Flag, Target } from 'lucide-react';
 import { ACTS, estimateMonthsToTarget } from '../data/roadmap';
 import { useApp } from '../store/AppContext';
 import { RuneDivider } from '../components/Ornament';
 import type { ActNumber, NavTab } from '../types';
 
+function clampDailyHours(dailyMinutes: number): number {
+  return Math.max(1.0, Math.min(4.0, Number((dailyMinutes / 60).toFixed(1))));
+}
+
 export function RoadmapPage({ onNavigate }: { onNavigate: (tab: NavTab) => void }) {
   const { profile, updateProfileSettings } = useApp();
-  const [simHours, setSimHours] = useState<number>(Number((profile.dailyMinutes / 60).toFixed(1)));
+  const [simHours, setSimHours] = useState<number>(() => clampDailyHours(profile.dailyMinutes));
   const [simStartBand, setSimStartBand] = useState<number>(profile.currentBand);
+  const [planSaved, setPlanSaved] = useState(false);
+  const planTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    setSimHours(Number((profile.dailyMinutes / 60).toFixed(1)));
+    setSimHours(clampDailyHours(profile.dailyMinutes));
   }, [profile.dailyMinutes]);
 
   useEffect(() => {
     setSimStartBand(profile.currentBand);
   }, [profile.currentBand]);
 
+  useEffect(() => {
+    return () => {
+      if (planTimerRef.current !== null) {
+        window.clearTimeout(planTimerRef.current);
+      }
+    };
+  }, []);
+
   const simEstimate = estimateMonthsToTarget(simStartBand, profile.targetBand, Math.round(simHours * 60));
 
   const applyDailyPlan = () => {
-    updateProfileSettings({ dailyMinutes: Math.round(simHours * 60) });
+    const minutes = Math.max(60, Math.min(240, Math.round(simHours * 60)));
+    updateProfileSettings({ dailyMinutes: minutes });
+    setPlanSaved(true);
+    if (planTimerRef.current !== null) {
+      window.clearTimeout(planTimerRef.current);
+    }
+    planTimerRef.current = window.setTimeout(() => {
+      planTimerRef.current = null;
+      setPlanSaved(false);
+    }, 2500);
   };
 
   return (
@@ -47,9 +70,15 @@ export function RoadmapPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
           </h2>
           <button
             onClick={applyDailyPlan}
-            className="btn-ghost-brass px-3.5 py-1.5 text-[11px] uppercase tracking-[0.12em] cursor-pointer"
+            className="btn-ghost-brass px-3.5 py-1.5 text-[11px] uppercase tracking-[0.12em] cursor-pointer inline-flex items-center gap-1.5"
           >
-            Áp dụng {simHours}h/ngày vào hồ sơ
+            {planSaved ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-[#7BC2A0]" /> Đã áp dụng {simHours.toFixed(1)}h/ngày
+              </>
+            ) : (
+              `Áp dụng ${simHours.toFixed(1)}h/ngày vào hồ sơ`
+            )}
           </button>
         </div>
 
@@ -101,8 +130,19 @@ export function RoadmapPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
           <div className="grid grid-cols-2 divide-x divide-[#C5A059]/20 border border-[#C5A059]/22 bg-[#0B0A08]">
             <div className="p-4 flex flex-col justify-center">
               <p className="text-[10px] uppercase tracking-[0.18em] text-[#968D80]">Thời gian dự kiến</p>
-              <p className="font-fantasy text-3xl text-[#E2C88D] mt-1">~{simEstimate.months} th</p>
-              <p className="text-[11px] text-[#968D80] mt-1">Tổng ~{simEstimate.hoursNeeded} giờ</p>
+              {simEstimate.months === 0 ? (
+                <>
+                  <p className="font-fantasy text-xl text-[#7BC2A0] mt-1">Đã đạt mục tiêu</p>
+                  <p className="text-[11px] text-[#968D80] mt-1">
+                    Band {simStartBand.toFixed(1)} ≥ {profile.targetBand.toFixed(1)}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="font-fantasy text-3xl text-[#E2C88D] mt-1">~{simEstimate.months} th</p>
+                  <p className="text-[11px] text-[#968D80] mt-1">Tổng ~{simEstimate.hoursNeeded} giờ</p>
+                </>
+              )}
             </div>
 
             <div className="p-4 flex flex-col justify-center">

@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
+  AlertCircle,
   BookmarkCheck,
   BookmarkPlus,
   Check,
@@ -20,6 +21,7 @@ export function ReadingPage() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
+  const [submitWarning, setSubmitWarning] = useState<string | null>(null);
 
   const lesson = READING_LESSONS.find((l) => l.id === selectedId) ?? READING_LESSONS[0];
 
@@ -28,6 +30,7 @@ export function ReadingPage() {
     setAnswers({});
     setSubmitted(false);
     setScore(null);
+    setSubmitWarning(null);
     setActiveWordKey(null);
     setMobilePane('passage');
     return () => stopSpeaking();
@@ -36,6 +39,12 @@ export function ReadingPage() {
   const activeWordInfo = activeWordKey ? lesson.glossary[activeWordKey] : null;
 
   const handleSubmit = () => {
+    const hasAnyAnswer = lesson.questions.some((q) => Boolean(answers[q.id]));
+    if (!hasAnyAnswer) {
+      setSubmitWarning('Hãy chọn ít nhất 1 đáp án trước khi chấm điểm nhé.');
+      return;
+    }
+    setSubmitWarning(null);
     let correct = 0;
     for (const q of lesson.questions) {
       if (answers[q.id] === q.answer) correct += 1;
@@ -49,28 +58,35 @@ export function ReadingPage() {
   const renderInteractiveParagraph = (text: string) => {
     const tokens = text.split(/(\s+)/);
     return tokens.map((token, i) => {
-      const clean = token.toLowerCase().replace(/[^a-z-]/g, '');
-      if (clean && lesson.glossary[clean]) {
-        const isSelected = activeWordKey === clean;
-        return (
-          <button
-            key={i}
-            type="button"
-            onClick={() => {
-              setActiveWordKey(clean);
-              speakText(clean, { lang: 'en-GB', rate: 0.9 });
-            }}
-            className={`inline px-0.5 transition cursor-pointer border-b ${
-              isSelected
-                ? 'bg-[#C5A059]/30 text-[#F8E9C8] border-[#E2C88D]'
-                : 'bg-[#C5A059]/10 hover:bg-[#C5A059]/22 text-[#EBD6A7] border-[#C5A059]/55'
-            }`}
-          >
-            {token}
-          </button>
-        );
+      const match = token.match(/^([^a-zA-Z-]*)([a-zA-Z-]+)([^a-zA-Z-]*)$/);
+      if (match) {
+        const [, leading, core, trailing] = match;
+        const clean = core.toLowerCase();
+        if (clean && lesson.glossary[clean]) {
+          const isSelected = activeWordKey === clean;
+          return (
+            <Fragment key={i}>
+              {leading}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveWordKey(clean);
+                  speakText(clean, { lang: 'en-GB', rate: 0.9 });
+                }}
+                className={`inline px-0.5 transition cursor-pointer border-b ${
+                  isSelected
+                    ? 'bg-[#C5A059]/30 text-[#F8E9C8] border-[#E2C88D]'
+                    : 'bg-[#C5A059]/10 hover:bg-[#C5A059]/22 text-[#EBD6A7] border-[#C5A059]/55'
+                }`}
+              >
+                {core}
+              </button>
+              {trailing}
+            </Fragment>
+          );
+        }
       }
-      return <React.Fragment key={i}>{token}</React.Fragment>;
+      return <Fragment key={i}>{token}</Fragment>;
     });
   };
 
@@ -159,12 +175,13 @@ export function ReadingPage() {
           </div>
 
           {activeWordKey && activeWordInfo && (
-            <div className="p-4 bg-[#0B0A08] border-l-2 border-[#E2C88D] border-y border-r border-y-[#C5A059]/20 border-r-[#C5A059]/20 flex flex-wrap items-center justify-between gap-3">
+            <div className="sticky top-[calc(3.75rem+env(safe-area-inset-top,0px))] lg:top-4 z-20 p-4 bg-[#0B0A08]/95 backdrop-blur-sm border-l-2 border-[#E2C88D] border-y border-r border-y-[#C5A059]/25 border-r-[#C5A059]/25 shadow-[0_12px_28px_-12px_rgba(0,0,0,0.9)] flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2.5">
                   <span className="font-fantasy text-lg text-[#E2C88D]">{activeWordKey}</span>
                   <span className="text-xs text-[#968D80]">{activeWordInfo.ipa}</span>
                   <button
+                    type="button"
                     onClick={() => speakText(activeWordKey, { lang: 'en-GB' })}
                     className="p-1 text-[#C5A059] hover:text-[#F4E6C5] cursor-pointer"
                     aria-label="Nghe phát âm"
@@ -175,26 +192,37 @@ export function ReadingPage() {
                 <p className="text-sm text-[#ECE6D8] mt-0.5">{activeWordInfo.meaningVi}</p>
               </div>
 
-              {activeWordInfo.vocabId && (
+              <div className="flex items-center gap-2">
+                {activeWordInfo.vocabId && (
+                  <button
+                    type="button"
+                    onClick={() => toggleSavedVocab(activeWordInfo.vocabId!)}
+                    className={`px-3 py-1.5 text-xs uppercase tracking-wider border flex items-center gap-1.5 cursor-pointer ${
+                      savedVocabIds.includes(activeWordInfo.vocabId)
+                        ? 'bg-[#4E8A6E]/20 border-[#4E8A6E] text-[#A8DFC4]'
+                        : 'btn-ghost-brass'
+                    }`}
+                  >
+                    {savedVocabIds.includes(activeWordInfo.vocabId) ? (
+                      <>
+                        <BookmarkCheck className="w-3.5 h-3.5" /> Đã lưu SRS
+                      </>
+                    ) : (
+                      <>
+                        <BookmarkPlus className="w-3.5 h-3.5" /> Lưu vào SRS
+                      </>
+                    )}
+                  </button>
+                )}
                 <button
-                  onClick={() => toggleSavedVocab(activeWordInfo.vocabId!)}
-                  className={`px-3 py-1.5 text-xs uppercase tracking-wider border flex items-center gap-1.5 cursor-pointer ${
-                    savedVocabIds.includes(activeWordInfo.vocabId)
-                      ? 'bg-[#4E8A6E]/20 border-[#4E8A6E] text-[#A8DFC4]'
-                      : 'btn-ghost-brass'
-                  }`}
+                  type="button"
+                  onClick={() => setActiveWordKey(null)}
+                  className="p-1.5 text-[#968D80] hover:text-[#ECE6D8] border border-[#C5A059]/20 cursor-pointer"
+                  aria-label="Đóng hộp tra từ"
                 >
-                  {savedVocabIds.includes(activeWordInfo.vocabId) ? (
-                    <>
-                      <BookmarkCheck className="w-3.5 h-3.5" /> Đã lưu SRS
-                    </>
-                  ) : (
-                    <>
-                      <BookmarkPlus className="w-3.5 h-3.5" /> Lưu vào SRS
-                    </>
-                  )}
+                  <X className="w-3.5 h-3.5" />
                 </button>
-              )}
+              </div>
             </div>
           )}
 
@@ -244,7 +272,10 @@ export function ReadingPage() {
                         <button
                           key={opt}
                           disabled={submitted}
-                          onClick={() => setAnswers((prev) => ({ ...prev, [q.id]: opt }))}
+                          onClick={() => {
+                            setSubmitWarning(null);
+                            setAnswers((prev) => ({ ...prev, [q.id]: opt }));
+                          }}
                           className={`px-3 py-2 text-xs sm:text-sm border transition text-left cursor-pointer ${
                             q.type === 'tfng' ? 'text-center font-semibold tracking-wider' : ''
                           } ${
@@ -291,6 +322,13 @@ export function ReadingPage() {
               );
             })}
           </div>
+
+          {submitWarning && (
+            <div className="p-3 bg-[#8E2933]/15 border border-[#8E2933]/50 text-xs text-[#F2C3C8] flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-[#E28A93]" />
+              <span>{submitWarning}</span>
+            </div>
+          )}
 
           {!submitted ? (
             <button onClick={handleSubmit} className="w-full btn-brass py-3 text-xs uppercase tracking-[0.16em] cursor-pointer">

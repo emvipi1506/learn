@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { ArrowRight, Check, Compass, Layers, Target } from 'lucide-react';
 import { useApp } from '../store/AppContext';
 import { ACTS, DAILY_QUESTS, estimateMonthsToTarget, getRankTitle } from '../data/roadmap';
@@ -9,6 +9,7 @@ import {
   WRITING_LESSONS,
 } from '../data/lessons';
 import { PlacementModal } from '../components/PlacementModal';
+import { SubmissionDetailModal } from '../components/SubmissionDetailModal';
 import { RuneDivider } from '../components/Ornament';
 import { SkillRadarChart } from '../components/SkillRadarChart';
 import {
@@ -18,7 +19,7 @@ import {
   SpeakingBrazierArt,
   WritingQuillArt,
 } from '../components/DarkArtworks';
-import type { NavTab } from '../types';
+import type { NavTab, PracticeSubmission } from '../types';
 
 export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => void }) {
   const {
@@ -31,6 +32,7 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
     submissions,
   } = useApp();
   const [placementOpen, setPlacementOpen] = useState(false);
+  const [selectedSubmission, setSelectedSubmission] = useState<PracticeSubmission | null>(null);
 
   const openVocabByLang = (lang: 'en' | 'ko') => {
     setActiveStudyLang(lang);
@@ -114,10 +116,20 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
           </h1>
 
           <p className="text-sm sm:text-[15px] text-[#C8BFB0] leading-relaxed max-w-xl">
-            Chào <span className="text-[#ECE6D8] font-medium">{profile.displayName}</span> ({rank.title}). Với nhịp học{' '}
-            <span className="text-[#E2C88D] font-medium">{(profile.dailyMinutes / 60).toFixed(1)} giờ/ngày</span>, lộ trình dự
-            kiến khoảng <span className="text-[#ECE6D8] font-medium">{estimate.months} tháng</span> (~{estimate.hoursNeeded}{' '}
-            giờ) để đạt <span className="text-[#E2C88D] font-semibold">IELTS Overall {profile.targetBand.toFixed(1)}</span>.
+            Chào <span className="text-[#ECE6D8] font-medium">{profile.displayName}</span> ({rank.title}).{' '}
+            {estimate.months === 0 ? (
+              <>
+                Bạn đã chạm ngưỡng mục tiêu{' '}
+                <span className="text-[#7BC2A0] font-semibold">IELTS Overall {profile.targetBand.toFixed(1)}</span> — hãy tiếp tục luyện đề Chương IV để giữ vững phong độ!
+              </>
+            ) : (
+              <>
+                Với nhịp học{' '}
+                <span className="text-[#E2C88D] font-medium">{(profile.dailyMinutes / 60).toFixed(1)} giờ/ngày</span>, lộ trình dự
+                kiến khoảng <span className="text-[#ECE6D8] font-medium">{estimate.months} tháng</span> (~{estimate.hoursNeeded}{' '}
+                giờ) để đạt <span className="text-[#E2C88D] font-semibold">IELTS Overall {profile.targetBand.toFixed(1)}</span>.
+              </>
+            )}
           </p>
 
           <div className="flex flex-wrap items-center gap-3 pt-2">
@@ -347,26 +359,43 @@ export function DashboardPage({ onNavigate }: { onNavigate: (tab: NavTab) => voi
       {/* Bài nộp gần đây */}
       {submissions.length > 0 && (
         <section className="sanctuary-panel p-5 sm:p-6 space-y-4">
-          <div className="pb-3 border-b border-[#C5A059]/15">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-[#C5A059]">Biên Niên Sử</p>
-            <h2 className="font-fantasy text-lg text-[#F4EFE4] mt-0.5">Bài Writing & Speaking Gần Đây</h2>
+          <div className="flex flex-wrap items-end justify-between gap-2 pb-3 border-b border-[#C5A059]/15">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.22em] text-[#C5A059]">Biên Niên Sử</p>
+              <h2 className="font-fantasy text-lg text-[#F4EFE4] mt-0.5">Bài Writing & Speaking Gần Đây</h2>
+            </div>
+            <p className="text-[11px] text-[#968D80]">Chạm vào từng thẻ để xem lại đề bài, bài làm & nhận xét AI</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {submissions.slice(0, 4).map((sub) => (
-              <div key={sub.id} className="p-4 bg-[#0D0C0A] border border-[#C5A059]/16">
+              <button
+                key={sub.id}
+                type="button"
+                onClick={() => setSelectedSubmission(sub)}
+                className="p-4 bg-[#0D0C0A] border border-[#C5A059]/16 hover:border-[#C5A059]/55 text-left transition cursor-pointer space-y-1.5"
+              >
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="uppercase tracking-[0.18em] text-[#C5A059]">{sub.skill}</span>
-                  <span className="font-crest text-[#E2C88D]">Band ~{sub.bandEstimate.toFixed(1)}</span>
+                  <span className="font-crest text-[#E2C88D]">
+                    {sub.bandEstimate > 0 ? `Band ~${sub.bandEstimate.toFixed(1)}` : 'Tự luyện'}
+                  </span>
                 </div>
-                <p className="text-sm font-medium text-[#ECE6D8] mt-1.5 line-clamp-1">{sub.promptTitle}</p>
-                <p className="text-xs text-[#968D80] mt-1 line-clamp-2">{sub.content}</p>
-              </div>
+                <p className="text-sm font-medium text-[#ECE6D8] line-clamp-1">{sub.promptTitle}</p>
+                <p className="text-xs text-[#968D80] line-clamp-2">{sub.content}</p>
+                <p className="text-[10px] uppercase tracking-[0.14em] text-[#C5A059]/85 pt-1">
+                  {sub.aiFeedback ? 'Xem nhận xét 4 tiêu chí AI →' : 'Xem chi tiết bài nộp →'}
+                </p>
+              </button>
             ))}
           </div>
         </section>
       )}
 
       <PlacementModal open={placementOpen} onClose={() => setPlacementOpen(false)} />
+      <SubmissionDetailModal
+        submission={selectedSubmission}
+        onClose={() => setSelectedSubmission(null)}
+      />
     </div>
   );
 }

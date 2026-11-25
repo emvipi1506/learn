@@ -180,17 +180,21 @@ export function estimateMonthsToTarget(currentBand: number, targetBand: number, 
   months: number;
   recommendedAct: ActNumber;
 } {
-  const safeDaily = Math.max(30, dailyMinutes);
-  const gap = Math.max(0.5, targetBand - currentBand);
-  // Trung bình cần ~180 giờ học chất lượng cho mỗi 1.0 band tăng thêm
-  const hoursNeeded = Math.round(gap * 180);
-  const totalDays = Math.ceil((hoursNeeded * 60) / safeDaily);
-  const months = Math.max(1, Number((totalDays / 30).toFixed(1)));
-
+  const safeDaily = Math.max(60, Math.min(240, dailyMinutes));
   let recommendedAct: ActNumber = 1;
   if (currentBand >= 6.0) recommendedAct = 4;
   else if (currentBand >= 5.0) recommendedAct = 3;
   else if (currentBand >= 4.0) recommendedAct = 2;
+
+  if (currentBand >= targetBand) {
+    return { hoursNeeded: 0, months: 0, recommendedAct };
+  }
+
+  const gap = targetBand - currentBand;
+  // Trung bình cần ~180 giờ học chất lượng cho mỗi 1.0 band tăng thêm
+  const hoursNeeded = Math.round(gap * 180);
+  const totalDays = Math.ceil((hoursNeeded * 60) / safeDaily);
+  const months = Math.max(1, Number((totalDays / 30).toFixed(1)));
 
   return { hoursNeeded, months, recommendedAct };
 }

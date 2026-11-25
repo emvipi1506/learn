@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   BookMarked,
@@ -7,6 +7,7 @@ import {
   Loader2,
   Play,
   Plus,
+  Trash2,
   Wand2,
 } from 'lucide-react';
 import { WRITING_LESSONS } from '../data/lessons';
@@ -16,10 +17,52 @@ import { AIFeedbackCard } from '../components/AIFeedbackCard';
 import { WritingQuillArt } from '../components/DarkArtworks';
 import type { AIFeedbackResult, NavTab } from '../types';
 
+const WRITING_DRAFT_PREFIX = 'grimoire_draft_writing_';
+
+function loadWritingDraft(lessonId: string): string {
+  try {
+    return localStorage.getItem(`${WRITING_DRAFT_PREFIX}${lessonId}`) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveWritingDraft(lessonId: string, text: string): void {
+  try {
+    if (text.trim()) {
+      localStorage.setItem(`${WRITING_DRAFT_PREFIX}${lessonId}`, text);
+    } else {
+      localStorage.removeItem(`${WRITING_DRAFT_PREFIX}${lessonId}`);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function removeWritingDraft(lessonId: string): void {
+  try {
+    localStorage.removeItem(`${WRITING_DRAFT_PREFIX}${lessonId}`);
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export function WritingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void }) {
   const { lessonProgress, completeLesson, geminiApiKey, addPracticeSubmission, profile } = useApp();
   const [selectedId, setSelectedId] = useState(WRITING_LESSONS[0].id);
-  const [essay, setEssay] = useState('');
+  const lesson = WRITING_LESSONS.find((l) => l.id === selectedId) ?? WRITING_LESSONS[0];
+  const [draftState, setDraftState] = useState<{ lessonId: string; text: string }>(() => ({
+    lessonId: WRITING_LESSONS[0].id,
+    text: loadWritingDraft(WRITING_LESSONS[0].id),
+  }));
+  const essay = draftState.lessonId === lesson.id ? draftState.text : loadWritingDraft(lesson.id);
+  const setEssay = (updater: string | ((prev: string) => string)) => {
+    setDraftState((prev) => {
+      const base = prev.lessonId === lesson.id ? prev.text : loadWritingDraft(lesson.id);
+      const nextText = typeof updater === 'function' ? updater(base) : updater;
+      return { lessonId: lesson.id, text: nextText };
+    });
+  };
   const [showSample, setShowSample] = useState(false);
   const [checkedItems, setCheckedItems] = useState<Record<number, boolean>>({});
   const [timerActive, setTimerActive] = useState(false);
@@ -32,11 +75,9 @@ export function WritingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const aiRequestIdRef = useRef(0);
 
-  const lesson = WRITING_LESSONS.find((l) => l.id === selectedId) ?? WRITING_LESSONS[0];
-
   useEffect(() => {
     aiRequestIdRef.current += 1;
-    setEssay('');
+    setDraftState({ lessonId: lesson.id, text: loadWritingDraft(lesson.id) });
     setShowSample(false);
     setCheckedItems({});
     setTimerActive(false);
@@ -47,6 +88,13 @@ export function WritingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
     setAiErrorNeedsSettings(false);
     setSavedNotice(null);
   }, [lesson.id, lesson.recommendedMinutes]);
+
+  // Tự lưu nháp bài viết vào localStorage theo từng đề (chỉ khi draft thuộc đúng đề đang mở)
+  useEffect(() => {
+    if (draftState.lessonId === lesson.id) {
+      saveWritingDraft(lesson.id, draftState.text);
+    }
+  }, [lesson.id, draftState]);
 
   useEffect(() => {
     if (!timerActive) return;
@@ -75,7 +123,11 @@ export function WritingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
   };
 
   const insertPhrase = (phrase: string) => {
-    setEssay((prev) => (prev.trim() ? `${prev.trim()} ${phrase} ` : `${phrase} `));
+    setEssay((prev) => {
+      if (!prev) return `${phrase} `;
+      if (/\s$/.test(prev)) return `${prev}${phrase} `;
+      return `${prev} ${phrase} `;
+    });
   };
 
   const handleSaveSelfCheck = () => {
@@ -87,17 +139,19 @@ export function WritingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
     setAiError(null);
     const checkedCount = Object.values(checkedItems).filter(Boolean).length;
     const score = Math.min(100, Math.round(wordPct * 0.6 + (checkedCount / lesson.checklistVi.length) * 40));
-    const estBand = wordCount >= lesson.minWords ? Math.min(6.5, 4.0 + lesson.act * 0.5) : 4.0;
 
-    completeLesson(lesson.id, 'writing', score, lesson.xpReward, lesson.recommendedMinutes);
+    completeLesson(lesson.id, 'writing', score, lesson.xpReward, lesson.recommendedMinutes, { updateBand: false });
     addPracticeSubmission({
       skill: 'writing',
       promptId: lesson.id,
       promptTitle: lesson.title,
       content: essay,
-      bandEstimate: estBand,
+      bandEstimate: 0,
     });
-    setSavedNotice(`Đã lưu bài viết (${wordCount} từ) và cộng +${lesson.xpReward} XP.`);
+    removeWritingDraft(lesson.id);
+    setSavedNotice(
+      `Đã lưu bài viết (${wordCount} từ) và cộng +${lesson.xpReward} XP (Chế độ tự chấm không tự cộng Band — dùng AI Chấm 4 Tiêu Chí để đo Band thực tế).`
+    );
   };
 
   const handleEvaluateAI = async () => {
@@ -134,7 +188,8 @@ export function WritingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
         'writing',
         Math.min(100, Math.round((result.overallBand / 7.0) * 100)),
         currentLesson.xpReward,
-        currentLesson.recommendedMinutes
+        currentLesson.recommendedMinutes,
+        { updateBand: false }
       );
       addPracticeSubmission({
         skill: 'writing',
@@ -144,6 +199,7 @@ export function WritingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
         bandEstimate: result.overallBand,
         aiFeedback: result,
       });
+      removeWritingDraft(currentLesson.id);
     } catch (err) {
       if (reqId !== aiRequestIdRef.current) return;
       const msg = err instanceof Error ? err.message : 'Không thể kết nối AI lúc này.';
@@ -301,15 +357,29 @@ export function WritingPage({ onNavigate }: { onNavigate: (tab: NavTab) => void 
                 className="btn-ghost-brass px-3.5 py-1.5 text-xs flex items-center gap-2 cursor-pointer"
               >
                 {timerActive ? <Clock className="w-3.5 h-3.5 text-[#E2C88D]" /> : <Play className="w-3.5 h-3.5" />}
-                <span className="font-fantasy tracking-wider">{formatTime(secondsLeft)}</span>
+                <span className="font-fantasy tracking-wider tabular-nums">{formatTime(secondsLeft)}</span>
                 <span className="text-[11px] text-[#968D80]">{timerActive ? 'Đang chạy' : 'Bấm giờ'}</span>
               </button>
 
-              <div className="text-xs">
-                <span className="text-[#968D80] mr-2">Số từ:</span>
-                <span className={`font-fantasy text-base ${wordCount >= lesson.minWords ? 'text-[#7BC2A0]' : 'text-[#E2C88D]'}`}>
-                  {wordCount} / {lesson.minWords}
-                </span>
+              <div className="flex items-center gap-3 text-xs">
+                {essay.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEssay('');
+                      removeWritingDraft(lesson.id);
+                    }}
+                    className="text-[11px] text-[#968D80] hover:text-[#E2C88D] inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" /> Xóa nháp
+                  </button>
+                )}
+                <div>
+                  <span className="text-[#968D80] mr-2">Số từ:</span>
+                  <span className={`font-fantasy text-base tabular-nums ${wordCount >= lesson.minWords ? 'text-[#7BC2A0]' : 'text-[#E2C88D]'}`}>
+                    {wordCount} / {lesson.minWords}
+                  </span>
+                </div>
               </div>
             </div>
 

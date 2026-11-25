@@ -16,7 +16,13 @@ import {
 import { useApp } from '../store/AppContext';
 import { SEJONG1_LESSONS_META } from '../data/koreanVocab';
 import { formatIntervalLabel, isCardDue, type ReviewRating } from '../lib/srs';
-import { getSpeakableText, getTTSVoiceStatus, speakText, stopSpeaking } from '../lib/speech';
+import {
+  cleanKoreanExampleForTTS,
+  getSpeakableText,
+  getTTSVoiceStatus,
+  speakText,
+  stopSpeaking,
+} from '../lib/speech';
 import type { ActNumber, StudyLanguage } from '../types';
 
 const LIBRARY_PAGE_SIZE = 30;
@@ -28,6 +34,7 @@ export function VocabPage() {
     savedVocabIds,
     activeStudyLang,
     setActiveStudyLang,
+    nowTick,
     dueVocabByLang,
     reviewVocabCard,
     toggleSavedVocab,
@@ -89,8 +96,23 @@ export function VocabPage() {
     };
     checkVoice();
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.addEventListener('voiceschanged', checkVoice);
-      return () => window.speechSynthesis.removeEventListener('voiceschanged', checkVoice);
+      try {
+        window.speechSynthesis.addEventListener('voiceschanged', checkVoice);
+        return () => {
+          try {
+            window.speechSynthesis.removeEventListener('voiceschanged', checkVoice);
+          } catch {
+            // ignore cleanup errors
+          }
+        };
+      } catch {
+        window.speechSynthesis.onvoiceschanged = checkVoice;
+        return () => {
+          if (window.speechSynthesis.onvoiceschanged === checkVoice) {
+            window.speechSynthesis.onvoiceschanged = null;
+          }
+        };
+      }
     }
     return undefined;
   }, [speechLang]);
@@ -119,8 +141,8 @@ export function VocabPage() {
   }, [langItems, savedSet]);
 
   const dueCards = useMemo(() => {
-    return savedLangItems.filter((v) => isCardDue(vocabSRS[v.id]));
-  }, [savedLangItems, vocabSRS]);
+    return savedLangItems.filter((v) => isCardDue(vocabSRS[v.id], nowTick));
+  }, [savedLangItems, vocabSRS, nowTick]);
 
   const currentCard = dueCards[0] ?? null;
 
@@ -165,8 +187,8 @@ export function VocabPage() {
     activeKoLessonIds.length > 0 && activeKoLessonIds.every((id) => savedSet.has(id));
 
   const masteredCount = useMemo(() => {
-    return langItems.filter((v) => (vocabSRS[v.id]?.repetitions ?? 0) >= 2).length;
-  }, [langItems, vocabSRS]);
+    return savedLangItems.filter((v) => (vocabSRS[v.id]?.repetitions ?? 0) >= 2).length;
+  }, [savedLangItems, vocabSRS]);
 
   const handleRate = (rating: ReviewRating) => {
     if (!currentCard) return;
@@ -175,6 +197,38 @@ export function VocabPage() {
     setCardNonce((n) => n + 1);
     reviewVocabCard(currentCard.id, rating);
   };
+
+  // Phím tắt Desktop: Space/Enter lật thẻ, 1-4 chấm điểm (chỉ khi không focus vào ô nhập/nút bấm)
+  useEffect(() => {
+    if (mode !== 'review' || !currentCard || composerOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
+        return;
+      }
+
+      if (e.key === ' ' || e.key === 'Enter') {
+        if (tag === 'BUTTON' || tag === 'A') return;
+        e.preventDefault();
+        setFlipped((f) => !f);
+        return;
+      }
+
+      if (flipped && (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4')) {
+        e.preventDefault();
+        const ratingMap: Record<string, ReviewRating> = { '1': 0, '2': 1, '3': 2, '4': 3 };
+        const rating = ratingMap[e.key];
+        stopSpeaking();
+        setFlipped(false);
+        setCardNonce((n) => n + 1);
+        reviewVocabCard(currentCard.id, rating);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mode, currentCard, composerOpen, flipped, reviewVocabCard]);
 
   const handleAddCustomCard = (e: React.FormEvent) => {
     e.preventDefault();
@@ -186,11 +240,12 @@ export function VocabPage() {
     }
 
     const reading = formReading.trim();
+    const cleanRom = isKorean ? reading.replace(/^\[|\]$/g, '').trim() : '';
     addCustomVocab({
       lang: activeStudyLang,
       word,
-      ipa: reading || (isKorean ? '' : '/.../'),
-      romanization: isKorean ? reading || undefined : undefined,
+      ipa: isKorean ? (cleanRom ? `[${cleanRom}]` : '') : reading,
+      romanization: isKorean ? cleanRom || undefined : undefined,
       pos: formPos.trim() || 'từ vựng',
       meaningVi,
       exampleEn: formExample.trim() || word,
@@ -310,7 +365,7 @@ export function VocabPage() {
           {isKorean && <span className="absolute top-0 inset-x-0 h-[2px] bg-[#7BC2A0]" />}
           <div className="flex items-center justify-between gap-2">
             <span className="font-fantasy text-sm sm:text-base tracking-wider">
-              II. 한국어 • Tiếng Hàn (KO)
+              II. <span className="font-sans font-semibold">한국어</span> • Tiếng Hàn (KO)
             </span>
             <span
               className={`px-2 py-0.5 text-[11px] font-semibold border ${
@@ -560,7 +615,11 @@ export function VocabPage() {
                   }`}
                 >
                   {/* MẶT TRƯỚC */}
-                  <div className="absolute inset-0 backface-hidden">
+                  <div
+                    className={`absolute inset-0 backface-hidden ${
+                      flipped ? 'pointer-events-none' : 'pointer-events-auto'
+                    }`}
+                  >
                     <div className="ornate-panel h-full p-6 sm:p-8 flex flex-col items-center justify-between text-center">
                       <div className="w-full flex items-center justify-between text-[11px] uppercase tracking-[0.16em]">
                         <span className={isKorean ? 'text-[#7BC2A0]' : 'text-[#C5A059]'}>
@@ -606,7 +665,11 @@ export function VocabPage() {
                   </div>
 
                   {/* MẶT SAU */}
-                  <div className="absolute inset-0 backface-hidden rotate-y-180">
+                  <div
+                    className={`absolute inset-0 backface-hidden rotate-y-180 ${
+                      flipped ? 'pointer-events-auto' : 'pointer-events-none'
+                    }`}
+                  >
                     <div
                       className="ornate-panel h-full p-6 sm:p-7 flex flex-col justify-between gap-3 overflow-y-auto overscroll-contain touch-pan-y"
                       style={{ WebkitOverflowScrolling: 'touch' }}
@@ -622,10 +685,13 @@ export function VocabPage() {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            speakText(currentCard.exampleEn, {
-                              lang: speechLang,
-                              rate: isKorean ? 0.88 : 0.92,
-                            });
+                            speakText(
+                              isKorean ? cleanKoreanExampleForTTS(currentCard.exampleEn) : currentCard.exampleEn,
+                              {
+                                lang: speechLang,
+                                rate: isKorean ? 0.88 : 0.92,
+                              }
+                            );
                           }}
                           className="btn-ghost-brass p-2 cursor-pointer shrink-0"
                           aria-label="Nghe câu ví dụ"
@@ -892,7 +958,11 @@ export function VocabPage() {
                           {v.isCustom && (
                             <button
                               type="button"
-                              onClick={() => deleteCustomVocab(v.id)}
+                              onClick={() => {
+                                if (window.confirm(`Xóa thẻ "${v.word}" khỏi Sổ Từ Vựng SRS?`)) {
+                                  deleteCustomVocab(v.id);
+                                }
+                              }}
                               className="p-2 bg-[#0B0A08] border border-[#8E2933]/40 hover:border-[#B83B47] text-[#F2B5BC] cursor-pointer"
                               aria-label="Xóa thẻ tự tạo"
                             >

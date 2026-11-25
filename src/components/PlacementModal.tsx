@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Award, Check, X } from 'lucide-react';
 import { PLACEMENT_QUESTIONS, estimateMonthsToTarget, roundIeltsBand } from '../data/roadmap';
 import { useApp } from '../store/AppContext';
@@ -17,7 +17,26 @@ export function PlacementModal({ open, onClose }: PlacementModalProps) {
     band: number;
     act: ActNumber;
     correctCount: number;
+    awardedXp: boolean;
   } | null>(null);
+
+  const resetAndClose = useCallback(() => {
+    setStep(0);
+    setAnswers({});
+    setFinishedResult(null);
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        resetAndClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, resetAndClose]);
 
   if (!open) return null;
 
@@ -46,6 +65,7 @@ export function PlacementModal({ open, onClose }: PlacementModalProps) {
       const act: ActNumber =
         estimatedBand >= 6.0 ? 4 : estimatedBand >= 5.0 ? 3 : estimatedBand >= 4.0 ? 2 : 1;
 
+      const awardedXp = !profile.placementCompleted;
       completePlacement(
         estimatedBand,
         {
@@ -56,15 +76,8 @@ export function PlacementModal({ open, onClose }: PlacementModalProps) {
         },
         act
       );
-      setFinishedResult({ band: estimatedBand, act, correctCount });
+      setFinishedResult({ band: estimatedBand, act, correctCount, awardedXp });
     }
-  };
-
-  const resetAndClose = () => {
-    setStep(0);
-    setAnswers({});
-    setFinishedResult(null);
-    onClose();
   };
 
   const estimate = finishedResult
@@ -72,8 +85,14 @@ export function PlacementModal({ open, onClose }: PlacementModalProps) {
     : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
-      <div className="w-full max-w-xl ornate-panel p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm"
+      onClick={resetAndClose}
+    >
+      <div
+        className="w-full max-w-xl ornate-panel p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button
           onClick={resetAndClose}
           className="absolute top-5 right-5 p-1.5 text-[#968D80] hover:text-[#ECE6D8] cursor-pointer"
@@ -121,7 +140,7 @@ export function PlacementModal({ open, onClose }: PlacementModalProps) {
               <Award className="w-7 h-7 text-[#E2C88D]" />
             </div>
             <p className="font-fantasy text-[11px] uppercase tracking-[0.24em] text-[#C5A059]">
-              Hoàn Thành Định Vị (+80 XP)
+              {finishedResult.awardedXp ? 'Hoàn Thành Định Vị (+80 XP)' : 'Đã Cập Nhật Định Vị'}
             </p>
             <h2 className="font-fantasy text-3xl text-[#F4EFE4] mt-2">
               Band Khởi Điểm: {finishedResult.band.toFixed(1)}
@@ -136,13 +155,17 @@ export function PlacementModal({ open, onClose }: PlacementModalProps) {
               <div className="mt-6 grid grid-cols-2 divide-x divide-[#C5A059]/20 border border-[#C5A059]/20 bg-[#0D0C0A] text-left">
                 <div className="p-4">
                   <p className="text-[11px] uppercase tracking-wider text-[#968D80]">Tổng thời lượng luyện</p>
-                  <p className="font-fantasy text-xl text-[#E2C88D] mt-1">~{estimate.hoursNeeded} giờ</p>
+                  <p className="font-fantasy text-xl text-[#E2C88D] mt-1">
+                    {estimate.hoursNeeded === 0 ? 'Đã đạt mục tiêu' : `~${estimate.hoursNeeded} giờ`}
+                  </p>
                 </div>
                 <div className="p-4">
                   <p className="text-[11px] uppercase tracking-wider text-[#968D80]">
-                    {(profile.dailyMinutes / 60).toFixed(1)}h/ngày lên {profile.targetBand}
+                    {(profile.dailyMinutes / 60).toFixed(1)}h/ngày lên {profile.targetBand.toFixed(1)}
                   </p>
-                  <p className="font-fantasy text-xl text-[#ECE6D8] mt-1">~{estimate.months} tháng</p>
+                  <p className="font-fantasy text-xl text-[#ECE6D8] mt-1">
+                    {estimate.months === 0 ? '0 tháng' : `~${estimate.months} tháng`}
+                  </p>
                 </div>
               </div>
             )}

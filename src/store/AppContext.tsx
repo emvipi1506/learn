@@ -10,6 +10,7 @@ import {
   getTodayStr,
   isValidUuid,
   mergePersistedStates,
+  sanitizeAiFeedback,
   sanitizeImportedState,
   type PersistedState,
 } from '../lib/syncMerge';
@@ -30,10 +31,30 @@ import type {
 } from '../types';
 
 const STORAGE_KEY = 'grimoire_ielts_state_v1';
+const ACTIVE_LANG_STORAGE_KEY = 'grimoire_active_study_lang';
 
 const STARTER_KO_IDS = KOREAN_VOCAB_BANK.filter((v) => v.lessonNum === 6)
   .slice(0, 10)
   .map((v) => v.id);
+
+function getSavedStudyLang(): StudyLanguage {
+  try {
+    return localStorage.getItem(ACTIVE_LANG_STORAGE_KEY) === 'ko' ? 'ko' : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+function isMissingProfileColumnError(err: { code?: string; message?: string; details?: string } | null): boolean {
+  if (!err) return false;
+  if (err.code === '42703' || err.code === 'PGRST204') return true;
+  const msg = `${err.message || ''} ${err.details || ''}`.toLowerCase();
+  return (
+    msg.includes('schema cache') ||
+    msg.includes('deleted_custom_vocab_ids') ||
+    msg.includes('settings_updated_at')
+  );
+}
 
 function getDefaultState(): PersistedState {
   const today = getTodayStr();
@@ -65,6 +86,7 @@ function getDefaultState(): PersistedState {
     ],
     starterSeeded: true,
     customVocab: [],
+    deletedCustomVocabIds: [],
     submissions: [],
     daily: {
       date: today,
@@ -73,7 +95,6 @@ function getDefaultState(): PersistedState {
       lessonsCompleted: 0,
       completedQuests: ['quest_streak'],
     },
-    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -89,13 +110,12 @@ function rolloverDailyIfNeeded(prev: PersistedState, today: string = getTodayStr
           ...prev.daily,
           completedQuests: nextQuests,
         },
-        updatedAt: new Date().toISOString(),
       };
     }
     return prev;
   }
 
-  // Sang ngày mới: reset Daily Quests và cộng +25 XP điểm danh (quest_streak) đúng 1 lần
+  // Sang ngày mới: chỉ cập nhật daily & điểm danh (+25 XP), không làm mới settingsUpdatedAt/updatedAt
   const fresh = createFreshDaily(today);
   const nextQuests = ['quest_streak'];
   const questBonus = computeNewlyCompletedQuestXp([], nextQuests);
@@ -107,7 +127,6 @@ function rolloverDailyIfNeeded(prev: PersistedState, today: string = getTodayStr
       ...fresh,
       completedQuests: nextQuests,
     },
-    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -149,9 +168,13 @@ function loadLocalState(): PersistedState {
       savedVocabIds,
       starterSeeded: true,
       customVocab: Array.isArray(parsed.customVocab) ? parsed.customVocab : [],
+      deletedCustomVocabIds: Array.isArray(parsed.deletedCustomVocabIds)
+        ? parsed.deletedCustomVocabIds.filter((id): id is string => typeof id === 'string')
+        : [],
       submissions: Array.isArray(parsed.submissions) ? parsed.submissions : [],
       daily: parsed.daily && typeof parsed.daily.date === 'string' ? parsed.daily : fallback.daily,
-      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
+      ...(typeof parsed.settingsUpdatedAt === 'string' ? { settingsUpdatedAt: parsed.settingsUpdatedAt } : {}),
+      ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
     };
 
     return rolloverDailyIfNeeded(baseState, today);
@@ -171,6 +194,7 @@ interface AppContextValue {
   daily: DailyProgress;
   activeStudyLang: StudyLanguage;
   setActiveStudyLang: (lang: StudyLanguage) => void;
+  nowTick: number;
   dueVocabCount: number;
   dueVocabByLang: { en: number; ko: number };
   geminiApiKey: string;
@@ -185,7 +209,14 @@ interface AppContextValue {
   syncNow: () => Promise<void>;
   updateProfileSettings: (patch: Partial<Pick<UserProfile, 'displayName' | 'dailyMinutes' | 'targetBand' | 'currentAct'>>) => void;
   completePlacement: (band: number, skillBands: SkillBands, recommendedAct: ActNumber) => void;
-  completeLesson: (lessonId: string, skill: SkillType, score: number, xpReward: number, studyMinutes?: number) => void;
+  completeLesson: (
+    lessonId: string,
+    skill: SkillType,
+    score: number,
+    xpReward: number,
+    studyMinutes?: number,
+    options?: { updateBand?: boolean }
+  ) => void;
   reviewVocabCard: (wordId: string, rating: ReviewRating) => void;
   toggleSavedVocab: (wordId: string) => void;
   setBatchSavedVocab: (wordIds: string[], save: boolean) => void;
@@ -203,7 +234,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const stateRef = useRef<PersistedState>(state);
   stateRef.current = state;
 
-  const [activeStudyLang, setActiveStudyLang] = useState<StudyLanguage>('en');
+  const [activeStudyLang, setActiveStudyLangState] = useState<StudyLanguage>(() => getSavedStudyLang());
+  const setActiveStudyLang = useCallback((lang: StudyLanguage) => {
+    setActiveStudyLangState(lang);
+    try {
+      localStorage.setItem(ACTIVE_LANG_STORAGE_KEY, lang);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [geminiApiKey, setGeminiApiKeyState] = useState<string>(() => getSavedGeminiKey());
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
   const cloudUserIdRef = useRef<string | null>(null);
@@ -222,6 +263,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const syncInFlightRef = useRef(false);
   const lastSyncAtRef = useRef(0);
   const lastAuthUserRef = useRef<string | null>(null);
+  const pushBusyRef = useRef(false);
+  const queuedPushRef = useRef<{ userId: string; snapshot: PersistedState } | null>(null);
+  const pushLoopPromiseRef = useRef<Promise<boolean> | null>(null);
+  const legacyProfileSchemaRef = useRef(false);
 
   const commitState = useCallback((next: PersistedState) => {
     stateRef.current = next;
@@ -237,12 +282,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state]);
 
-  // Đẩy dữ liệu đã hợp nhất lên Supabase và kiểm tra chặt mọi { error }
-  const pushToCloud = useCallback(async (userId: string, snapshot: PersistedState) => {
+  // Cập nhật nowTick mỗi 60 giây để thẻ bấm "Quên" tự hiện lại sau 10 phút
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowTick(Date.now());
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const executeSinglePush = useCallback(async (userId: string, snapshot: PersistedState): Promise<boolean> => {
     if (!supabase) return false;
     setSyncStatus('syncing');
     try {
-      const profileRes = await supabase.from('profiles').upsert({
+      const baseProfilePayload = {
         id: userId,
         display_name: snapshot.profile.displayName,
         current_band: snapshot.profile.currentBand,
@@ -258,7 +310,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         saved_vocab_ids: snapshot.savedVocabIds,
         starter_seeded: snapshot.starterSeeded,
         updated_at: snapshot.updatedAt || new Date().toISOString(),
-      });
+      };
+
+      let profileRes = legacyProfileSchemaRef.current
+        ? await supabase.from('profiles').upsert(baseProfilePayload)
+        : await supabase.from('profiles').upsert({
+            ...baseProfilePayload,
+            deleted_custom_vocab_ids: snapshot.deletedCustomVocabIds || [],
+            settings_updated_at: snapshot.settingsUpdatedAt || null,
+          });
+
+      if (profileRes.error && !legacyProfileSchemaRef.current && isMissingProfileColumnError(profileRes.error)) {
+        legacyProfileSchemaRef.current = true;
+        profileRes = await supabase.from('profiles').upsert(baseProfilePayload);
+      }
       if (profileRes.error) throw profileRes.error;
 
       const lessonRows = Object.values(snapshot.lessonProgress).map((l) => ({
@@ -368,6 +433,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Hàng đợi tuần tự (coalesce latest snapshot) chống race condition khi nhiều request đẩy lên cloud liên tiếp
+  const pushToCloud = useCallback(
+    (userId: string, snapshot: PersistedState): Promise<boolean> => {
+      if (!supabase) return Promise.resolve(false);
+      if (pushBusyRef.current) {
+        queuedPushRef.current = { userId, snapshot };
+        return pushLoopPromiseRef.current ?? Promise.resolve(true);
+      }
+
+      pushBusyRef.current = true;
+      const loopPromise = (async () => {
+        let current: { userId: string; snapshot: PersistedState } | null = { userId, snapshot };
+        let ok = false;
+        try {
+          while (current) {
+            if (cloudUserIdRef.current !== current.userId) {
+              queuedPushRef.current = null;
+              break;
+            }
+            ok = await executeSinglePush(current.userId, current.snapshot);
+            current = queuedPushRef.current;
+            queuedPushRef.current = null;
+          }
+        } finally {
+          pushBusyRef.current = false;
+          pushLoopPromiseRef.current = null;
+        }
+        return ok;
+      })();
+
+      pushLoopPromiseRef.current = loopPromise;
+      return loopPromise;
+    },
+    [executeSinglePush]
+  );
+
   // Luồng đồng bộ 2 chiều an toàn: Pull -> Merge thông minh -> Push
   const syncBidirectional = useCallback(
     async (
@@ -381,6 +482,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSyncMessage('Đang đồng bộ hai chiều iOS ↔ Windows...');
 
       try {
+        if (pushLoopPromiseRef.current) {
+          await pushLoopPromiseRef.current;
+        }
         const today = getTodayStr();
         const [profileRes, lessonsRes, vocabRes, customRes, subsRes, dailyRes] = await Promise.all([
           supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
@@ -403,6 +507,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
         for (const res of [profileRes, lessonsRes, vocabRes, customRes, subsRes, dailyRes]) {
           if (res.error) throw res.error;
+        }
+
+        if (cloudUserIdRef.current !== userId) {
+          return;
         }
 
         const localCurrent = rolloverDailyIfNeeded(stateRef.current, today);
@@ -466,16 +574,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           isCustom: true,
         }));
 
-        const cloudSubs: PracticeSubmission[] = (subsRes.data || []).map((row) => ({
-          id: row.id,
-          skill: row.skill as 'writing' | 'speaking',
-          promptId: row.prompt_id,
-          promptTitle: row.prompt_title,
-          content: row.content,
-          bandEstimate: Number(row.band_estimate || 5.0),
-          aiFeedback: row.ai_feedback || undefined,
-          createdAt: row.created_at,
-        }));
+        const cloudSubs: PracticeSubmission[] = (subsRes.data || []).map((row) => {
+          const rawBand =
+            row.band_estimate === null || row.band_estimate === undefined
+              ? 0
+              : Number(row.band_estimate);
+          return {
+            id: row.id,
+            skill: row.skill as 'writing' | 'speaking',
+            promptId: row.prompt_id,
+            promptTitle: row.prompt_title,
+            content: row.content,
+            bandEstimate: Number.isFinite(rawBand) ? rawBand : 0,
+            aiFeedback: sanitizeAiFeedback(row.ai_feedback),
+            createdAt: row.created_at,
+          };
+        });
 
         const cloudDaily: DailyProgress | undefined = dailyRes.data
           ? {
@@ -492,6 +606,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const cloudSavedIds = Array.isArray(cloudProfileData?.saved_vocab_ids)
           ? (cloudProfileData.saved_vocab_ids as string[])
           : undefined;
+        const cloudDeletedCustomIds = Array.isArray(cloudProfileData?.deleted_custom_vocab_ids)
+          ? (cloudProfileData.deleted_custom_vocab_ids as string[])
+          : undefined;
+        const cloudSettingsUpdatedAt =
+          typeof cloudProfileData?.settings_updated_at === 'string'
+            ? cloudProfileData.settings_updated_at
+            : undefined;
 
         const merged = mergePersistedStates(
           localCurrent,
@@ -502,8 +623,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             savedVocabIds: cloudSavedIds,
             starterSeeded: Boolean(cloudProfileData?.starter_seeded),
             customVocab: cloudCustomVocab,
+            deletedCustomVocabIds: cloudDeletedCustomIds,
             submissions: cloudSubs,
             daily: cloudDaily,
+            settingsUpdatedAt: cloudSettingsUpdatedAt,
             updatedAt: cloudProfileData?.updated_at || undefined,
           },
           {
@@ -559,10 +682,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Chỉ đồng bộ khi mới nhận phiên (INITIAL_SESSION / SIGNED_IN) hoặc đổi user
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || lastAuthUserRef.current !== user.id) {
           lastAuthUserRef.current = user.id;
-          void syncBidirectional(user.id, user.email || null, { pushAfterMerge: true });
+          void syncBidirectional(user.id, user.email || null, {
+            pushAfterMerge: true,
+            preferCloudSavedVocab: true,
+          });
         }
       } else {
         lastAuthUserRef.current = null;
+        cloudUserIdRef.current = null;
+        cloudUserEmailRef.current = null;
         setCloudUserId(null);
         setCloudUserEmail(null);
         setSyncStatus('local');
@@ -580,6 +708,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const handleWakeOrOnline = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
 
+      setNowTick(Date.now());
       const today = getTodayStr();
       const rolled = rolloverDailyIfNeeded(stateRef.current, today);
       if (rolled !== stateRef.current) {
@@ -643,18 +772,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOutCloud = useCallback(async () => {
+    queuedPushRef.current = null;
+    lastAuthUserRef.current = null;
+    cloudUserIdRef.current = null;
+    cloudUserEmailRef.current = null;
+    setCloudUserId(null);
+    setCloudUserEmail(null);
     if (supabase) {
-      await supabase.auth.signOut();
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // Vẫn dọn sạch dữ liệu cục bộ nếu đăng xuất khi mất mạng
+      }
     }
-  }, []);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(ACTIVE_LANG_STORAGE_KEY);
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('grimoire_draft_')) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+    commitState(getDefaultState());
+    setActiveStudyLangState('en');
+    setSyncStatus('local');
+    setSyncMessage('Chế độ Khách (Lưu trên thiết bị)');
+  }, [commitState]);
 
   const updateProfileSettings = useCallback(
     (patch: Partial<Pick<UserProfile, 'displayName' | 'dailyMinutes' | 'targetBand' | 'currentAct'>>) => {
       const prev = stateRef.current;
+      const nowIso = new Date().toISOString();
       const next: PersistedState = {
         ...prev,
         profile: { ...prev.profile, ...patch },
-        updatedAt: new Date().toISOString(),
+        settingsUpdatedAt: nowIso,
+        updatedAt: nowIso,
       };
       commitState(next);
       if (cloudUserIdRef.current) {
@@ -668,6 +825,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (band: number, skillBands: SkillBands, recommendedAct: ActNumber) => {
       const today = getTodayStr();
       const prev = rolloverDailyIfNeeded(stateRef.current, today);
+      const isFirstPlacement = !prev.profile.placementCompleted;
+      const nowIso = new Date().toISOString();
       const nextProfile = applyXpGain(
         {
           ...prev.profile,
@@ -676,13 +835,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           currentAct: recommendedAct,
           placementCompleted: true,
         },
-        80,
+        isFirstPlacement ? 80 : 0,
         today
       );
       const next: PersistedState = {
         ...prev,
         profile: nextProfile,
-        updatedAt: new Date().toISOString(),
+        settingsUpdatedAt: nowIso,
+        updatedAt: nowIso,
       };
       commitState(next);
       if (cloudUserIdRef.current) {
@@ -693,16 +853,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const completeLesson = useCallback(
-    (lessonId: string, skill: SkillType, score: number, xpReward: number, studyMinutes = 15) => {
+    (
+      lessonId: string,
+      skill: SkillType,
+      score: number,
+      xpReward: number,
+      studyMinutes = 15,
+      options?: { updateBand?: boolean }
+    ) => {
       const today = getTodayStr();
       const prev = rolloverDailyIfNeeded(stateRef.current, today);
       const prevRecord = prev.lessonProgress[lessonId];
-      const bestScore = prevRecord ? Math.max(prevRecord.score, score) : score;
+      const prevBestScore = prevRecord?.score ?? 0;
+      const bestScore = Math.max(prevBestScore, score);
       const isFirstCompletion = !prevRecord;
+      const shouldUpdateBand = options?.updateBand ?? true;
 
       const nextSkillBands = { ...prev.profile.skillBands };
-      if (score >= 70 && nextSkillBands[skill] < 6.5) {
-        nextSkillBands[skill] = roundIeltsBand(nextSkillBands[skill] + (isFirstCompletion ? 0.5 : 0));
+      if (shouldUpdateBand && score >= 70) {
+        let bandGain = 0;
+        if (prevBestScore < 70 && score >= 70) bandGain += 0.5;
+        if (prevBestScore < 90 && score >= 90) bandGain += 0.5;
+        if (bandGain > 0) {
+          nextSkillBands[skill] = roundIeltsBand(nextSkillBands[skill] + bandGain);
+        }
       }
       const avgBand = roundIeltsBand(
         (nextSkillBands.listening + nextSkillBands.reading + nextSkillBands.writing + nextSkillBands.speaking) / 4
@@ -799,13 +973,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (wordId: string) => {
       const prev = stateRef.current;
       const exists = prev.savedVocabIds.includes(wordId);
+      const nowIso = new Date().toISOString();
       const next: PersistedState = {
         ...prev,
         savedVocabIds: exists
           ? prev.savedVocabIds.filter((id) => id !== wordId)
           : [...prev.savedVocabIds, wordId],
         starterSeeded: true,
-        updatedAt: new Date().toISOString(),
+        settingsUpdatedAt: nowIso,
+        updatedAt: nowIso,
       };
       commitState(next);
       if (cloudUserIdRef.current) {
@@ -823,11 +999,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (save) nextSet.add(id);
         else nextSet.delete(id);
       }
+      const nowIso = new Date().toISOString();
       const next: PersistedState = {
         ...prev,
         savedVocabIds: Array.from(nextSet),
         starterSeeded: true,
-        updatedAt: new Date().toISOString(),
+        settingsUpdatedAt: nowIso,
+        updatedAt: nowIso,
       };
       commitState(next);
       if (cloudUserIdRef.current) {
@@ -847,12 +1025,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isCustom: true,
       };
       const prev = stateRef.current;
+      const nowIso = new Date().toISOString();
       const next: PersistedState = {
         ...prev,
         customVocab: [created, ...prev.customVocab],
         savedVocabIds: [created.id, ...prev.savedVocabIds],
+        deletedCustomVocabIds: (prev.deletedCustomVocabIds || []).filter((id) => id !== created.id),
         starterSeeded: true,
-        updatedAt: new Date().toISOString(),
+        settingsUpdatedAt: nowIso,
+        updatedAt: nowIso,
       };
       commitState(next);
       if (cloudUserIdRef.current) {
@@ -868,28 +1049,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const prev = stateRef.current;
       const nextSRS = { ...prev.vocabSRS };
       delete nextSRS[wordId];
+      const nowIso = new Date().toISOString();
       const next: PersistedState = {
         ...prev,
         customVocab: prev.customVocab.filter((v) => v.id !== wordId),
         savedVocabIds: prev.savedVocabIds.filter((id) => id !== wordId),
+        deletedCustomVocabIds: Array.from(
+          new Set([...(prev.deletedCustomVocabIds || []), wordId])
+        ).slice(-200),
         vocabSRS: nextSRS,
-        updatedAt: new Date().toISOString(),
+        settingsUpdatedAt: nowIso,
+        updatedAt: nowIso,
       };
       commitState(next);
 
       const uid = cloudUserIdRef.current;
       if (uid && supabase) {
         void (async () => {
+          if (pushLoopPromiseRef.current) {
+            await pushLoopPromiseRef.current;
+          }
+          if (cloudUserIdRef.current !== uid || !supabase) return;
           const [delCustom, delSrs] = await Promise.all([
             supabase.from('custom_vocab').delete().eq('user_id', uid).eq('word_id', wordId),
             supabase.from('vocab_cards').delete().eq('user_id', uid).eq('word_id', wordId),
           ]);
+          if (cloudUserIdRef.current !== uid) return;
           if (delCustom.error || delSrs.error) {
             setSyncStatus('error');
             setSyncMessage('Không thể xóa thẻ trên đám mây (đã xóa trên máy)');
             return;
           }
-          await pushToCloud(uid, next);
+          await pushToCloud(uid, stateRef.current);
         })();
       }
     },
@@ -907,7 +1098,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       };
 
       const nextSkillBands = { ...prev.profile.skillBands };
-      if (submission.bandEstimate > nextSkillBands[submission.skill]) {
+      const hasAiScore = Boolean(submission.aiFeedback) && submission.bandEstimate > 0;
+      if (hasAiScore && submission.bandEstimate > nextSkillBands[submission.skill]) {
         nextSkillBands[submission.skill] = roundIeltsBand(submission.bandEstimate);
       }
       const avgBand = roundIeltsBand(
@@ -916,15 +1108,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const next: PersistedState = {
         ...prev,
-        profile: applyXpGain(
-          {
-            ...prev.profile,
-            skillBands: nextSkillBands,
-            currentBand: Math.max(prev.profile.currentBand, avgBand),
-          },
-          70,
-          today
-        ),
+        profile: {
+          ...prev.profile,
+          skillBands: nextSkillBands,
+          currentBand: hasAiScore ? Math.max(prev.profile.currentBand, avgBand) : prev.profile.currentBand,
+        },
         submissions: [record, ...prev.submissions].slice(0, 30),
         updatedAt: new Date().toISOString(),
       };
@@ -974,12 +1162,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let ko = 0;
     for (const item of allVocabItems) {
       if (!savedSet.has(item.id)) continue;
-      if (!isCardDue(state.vocabSRS[item.id])) continue;
+      if (!isCardDue(state.vocabSRS[item.id], nowTick)) continue;
       if ((item.lang ?? 'en') === 'ko') ko += 1;
       else en += 1;
     }
     return { en, ko };
-  }, [allVocabItems, state.savedVocabIds, state.vocabSRS]);
+  }, [allVocabItems, state.savedVocabIds, state.vocabSRS, nowTick]);
 
   const dueVocabCount = dueVocabByLang.en + dueVocabByLang.ko;
 
@@ -995,6 +1183,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       daily: state.daily,
       activeStudyLang,
       setActiveStudyLang,
+      nowTick,
       dueVocabCount,
       dueVocabByLang,
       geminiApiKey,
@@ -1023,6 +1212,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       state,
       allVocabItems,
       activeStudyLang,
+      setActiveStudyLang,
+      nowTick,
       dueVocabCount,
       dueVocabByLang,
       geminiApiKey,

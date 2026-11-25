@@ -1,5 +1,3 @@
-import React from 'react';
-
 /** Huy hiệu Grimoire tối giản khắc đồng cổ */
 export function GrimoireCrest({ className = 'w-8 h-8' }: { className?: string }) {
   return (

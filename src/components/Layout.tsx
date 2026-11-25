@@ -343,7 +343,7 @@ export function Layout({ activeTab, onSelectTab, children }: LayoutProps) {
             <span>Từ vựng</span>
             {dueVocabCount > 0 && (
               <span className="absolute top-2 right-3 min-w-[15px] h-[15px] px-1 bg-[#8E2933] border border-[#E2C88D]/60 text-[#ECE6D8] text-[9px] font-bold flex items-center justify-center">
-                {dueVocabCount}
+                {dueVocabCount > 99 ? '99+' : dueVocabCount}
               </span>
             )}
           </button>

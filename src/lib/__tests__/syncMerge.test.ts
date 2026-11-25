@@ -5,6 +5,7 @@ import {
   generateSubmissionId,
   isValidUuid,
   mergePersistedStates,
+  sanitizeAiFeedback,
   sanitizeImportedState,
   type PersistedState,
 } from '../syncMerge';
@@ -56,6 +57,7 @@ function makeState(overrides?: Partial<PersistedState>): PersistedState {
         isCustom: true,
       },
     ],
+    deletedCustomVocabIds: [],
     submissions: [
       {
         id: 'sub_win_1',
@@ -322,5 +324,192 @@ describe('Đồng bộ hai chiều iOS ↔ Windows (syncMerge.ts)', () => {
     const merged = mergePersistedStates(local, cloud, { today: '2026-11-24' });
     expect(merged.submissions).toHaveLength(1);
     expect(merged.submissions[0].id).toBe(id);
+  });
+
+  it('tách settingsUpdatedAt khỏi updatedAt: ưu tiên savedVocabIds & cho phép hạ currentAct theo settingsUpdatedAt mới hơn', () => {
+    const localAfterLesson = makeState({
+      profile: { ...makeState().profile, currentAct: 3 },
+      savedVocabIds: ['v1', 'v2', 'v3'],
+      settingsUpdatedAt: '2026-11-24T08:00:00.000Z',
+      updatedAt: '2026-11-24T15:00:00.000Z', // vừa làm bài học xong nên updatedAt mới hơn
+    });
+    const cloudAfterUncheckAndLowerAct: Partial<PersistedState> = {
+      profile: { ...makeState().profile, currentAct: 2 },
+      savedVocabIds: ['v1'], // bỏ chọn v2, v3 trên máy khác
+      settingsUpdatedAt: '2026-11-24T12:00:00.000Z', // settings mới hơn local (12:00 > 08:00)
+      updatedAt: '2026-11-24T12:00:00.000Z',
+    };
+
+    // Dù syncNow (preferCloudSavedVocab: false) hay INITIAL_SESSION (true), cloud settingsUpdatedAt mới hơn phải thắng
+    const mergedSyncNow = mergePersistedStates(localAfterLesson, cloudAfterUncheckAndLowerAct, {
+      today: '2026-11-24',
+      preferCloudSavedVocab: false,
+      cloudHasProfile: true,
+    });
+    expect(mergedSyncNow.savedVocabIds).toEqual(['v1']);
+    expect(mergedSyncNow.profile.currentAct).toBe(2);
+
+    // Ngược lại, khi local chủ động hạ currentAct & bỏ chọn thẻ với settingsUpdatedAt mới hơn -> local thắng
+    const localNewerSettings = makeState({
+      profile: { ...makeState().profile, currentAct: 1 },
+      savedVocabIds: [],
+      settingsUpdatedAt: '2026-11-24T16:00:00.000Z',
+      updatedAt: '2026-11-24T16:00:00.000Z',
+    });
+    const mergedInitial = mergePersistedStates(localNewerSettings, cloudAfterUncheckAndLowerAct, {
+      today: '2026-11-24',
+      preferCloudSavedVocab: true,
+      cloudHasProfile: true,
+    });
+    expect(mergedInitial.savedVocabIds).toEqual([]);
+    expect(mergedInitial.profile.currentAct).toBe(1);
+  });
+
+  it('hợp nhất tombstone deletedCustomVocabIds để không hồi sinh thẻ tự tạo đã xóa khi sync', () => {
+    const localDeleted = makeState({
+      customVocab: [],
+      savedVocabIds: ['v1'],
+      deletedCustomVocabIds: ['en_custom_win'],
+      settingsUpdatedAt: '2026-11-24T12:00:00.000Z',
+    });
+    const cloudStale: Partial<PersistedState> = {
+      customVocab: makeState().customVocab,
+      savedVocabIds: ['v1', 'en_custom_win'],
+      vocabSRS: {
+        en_custom_win: {
+          wordId: 'en_custom_win',
+          easeFactor: 2.5,
+          intervalDays: 1,
+          repetitions: 1,
+          nextReviewAt: '2026-11-25T10:00:00.000Z',
+        },
+      },
+      settingsUpdatedAt: '2026-11-24T08:00:00.000Z',
+    };
+
+    const merged = mergePersistedStates(localDeleted, cloudStale, { today: '2026-11-24' });
+    expect(merged.customVocab).toEqual([]);
+    expect(merged.savedVocabIds).toEqual(['v1']);
+    expect(merged.vocabSRS.en_custom_win).toBeUndefined();
+    expect(merged.deletedCustomVocabIds).toContain('en_custom_win');
+  });
+
+  it('không ghi đè dữ liệu Khách khi tài khoản vừa đăng ký có profile rỗng từ trigger handle_new_user()', () => {
+    const localGuest = makeState({
+      profile: { ...makeState().profile, displayName: 'Phong', currentAct: 2 },
+      savedVocabIds: ['v1', 'v2'],
+      settingsUpdatedAt: '2026-11-24T08:00:00.000Z',
+      updatedAt: '2026-11-24T08:00:00.000Z',
+    });
+    const freshTriggerCloud: Partial<PersistedState> = {
+      profile: {
+        ...makeState().profile,
+        id: 'cloud-uuid',
+        displayName: 'Học Giả Mới',
+        currentAct: 1,
+      },
+      savedVocabIds: undefined,
+      starterSeeded: false,
+      settingsUpdatedAt: undefined,
+      updatedAt: '2026-11-24T18:00:00.000Z',
+    };
+
+    const merged = mergePersistedStates(localGuest, freshTriggerCloud, {
+      today: '2026-11-24',
+      cloudHasProfile: true,
+      preferCloudSavedVocab: true,
+    });
+    expect(merged.profile.displayName).toBe('Phong');
+    expect(merged.profile.currentAct).toBe(2);
+    expect(merged.savedVocabIds).toEqual(['v1', 'v2']);
+  });
+
+  it('sanitizeImportedState chuẩn hóa sub_... sang UUID v4 và loại bỏ aiFeedback bị hỏng', () => {
+    const base = makeState();
+    const res = sanitizeImportedState(
+      {
+        profile: { displayName: 'Tester', xp: 100 },
+        submissions: [
+          {
+            id: 'sub_old_1',
+            skill: 'writing',
+            promptId: 'w1',
+            promptTitle: 'Task 1',
+            content: 'Essay body',
+            bandEstimate: 6.0,
+            aiFeedback: { overallBand: 6.0, criteria: [] }, // hỏng vì thiếu criteria
+          },
+          {
+            id: 'sub_old_2',
+            skill: 'speaking',
+            promptId: 's1',
+            promptTitle: 'Part 1',
+            content: 'Hello world',
+            bandEstimate: 6.5,
+            aiFeedback: {
+              overallBand: 6.5,
+              criteria: [{ name: 'FC', score: 6.5, commentVi: 'Trôi chảy' }],
+              strengthsVi: ['Tốt'],
+              improvementsVi: ['Thêm từ nối'],
+              upgradedVersionEn: 'Upgraded.',
+              encouragementVi: 'Tuyệt!',
+              transcriptEn: 'Hello world',
+            },
+          },
+        ],
+      },
+      base,
+      base,
+      '2026-11-24'
+    );
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(isValidUuid(res.state.submissions[0].id)).toBe(true);
+      expect(res.state.submissions[0].aiFeedback).toBeUndefined();
+      expect(isValidUuid(res.state.submissions[1].id)).toBe(true);
+      expect(res.state.submissions[1].aiFeedback?.transcriptEn).toBe('Hello world');
+    }
+  });
+
+  it('sanitizeAiFeedback lọc sạch object hỏng và giữ nguyên dữ liệu hợp lệ khi đồng bộ từ Supabase', () => {
+    expect(sanitizeAiFeedback(null)).toBeUndefined();
+    expect(sanitizeAiFeedback({ overallBand: 'bad', criteria: [] })).toBeUndefined();
+    expect(sanitizeAiFeedback({ overallBand: 6.5, criteria: [{ name: '', score: 6 }] })).toBeUndefined();
+
+    const valid = sanitizeAiFeedback({
+      overallBand: 6.3,
+      criteria: [{ name: 'LR', score: 6.8, commentVi: 'Từ vựng ổn' }],
+      strengthsVi: ['Rõ ý'],
+      improvementsVi: [],
+      upgradedVersionEn: 'Upgraded.',
+      encouragementVi: 'Tiếp tục nhé!',
+      transcriptEn: '  Hello world  ',
+    });
+    expect(valid?.overallBand).toBe(6.5);
+    expect(valid?.criteria[0].score).toBe(7.0);
+    expect(valid?.transcriptEn).toBe('Hello world');
+  });
+
+  it('giữ tên hiển thị mới khi Khách đã làm bài cục bộ (chưa đặt settingsUpdatedAt) đăng ký tài khoản đám mây', () => {
+    const guestWithLessonOnly = makeState({
+      profile: { ...makeState().profile, displayName: 'Học Giả Khởi Nguyên' },
+      settingsUpdatedAt: undefined,
+      updatedAt: '2026-11-24T15:00:00.000Z',
+    });
+    const newCloudUser: Partial<PersistedState> = {
+      profile: { ...makeState().profile, id: 'new-uid', displayName: 'Minh Anh', currentAct: 1 },
+      savedVocabIds: undefined,
+      starterSeeded: false,
+      settingsUpdatedAt: undefined,
+      updatedAt: '2026-11-24T14:00:00.000Z',
+    };
+
+    const merged = mergePersistedStates(guestWithLessonOnly, newCloudUser, {
+      today: '2026-11-24',
+      cloudHasProfile: true,
+      preferCloudSavedVocab: true,
+    });
+    expect(merged.profile.displayName).toBe('Minh Anh');
   });
 });

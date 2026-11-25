@@ -1,5 +1,3 @@
-import React from 'react';
-
 export function RuneDivider({ label }: { label?: string }) {
   return (
     <div className="rune-divider my-1">

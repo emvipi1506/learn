@@ -66,9 +66,11 @@ export function calculateNextSRS(current: VocabSRSState, rating: ReviewRating): 
   };
 }
 
-export function isCardDue(card?: VocabSRSState): boolean {
+export function isCardDue(card?: VocabSRSState, nowMs: number = Date.now()): boolean {
   if (!card) return true;
-  return new Date(card.nextReviewAt).getTime() <= Date.now();
+  const dueMs = new Date(card.nextReviewAt).getTime();
+  if (Number.isNaN(dueMs)) return true;
+  return dueMs <= nowMs;
 }
 
 export function formatIntervalLabel(card: VocabSRSState | undefined, rating: ReviewRating): string {
